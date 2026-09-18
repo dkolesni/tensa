@@ -10,6 +10,15 @@ it. There is no server and no external compiler binary — everything (lexer, pa
 checker, IR, reference backend, PyTorch code generator, test suite) runs client-side in TypeScript,
 bundled into a single static HTML file by Vite.
 
+## GPU execution requirement
+
+GPU is the default execution target. Generated PyTorch must fail clearly when no GPU is available;
+never silently fall back to CPU. CPU requires explicit `device cpu` in the plan, `device="cpu"`
+in generated Python, or `--device cpu` in the fidelity harness. The browser/Node reference
+interpreter is an explicitly CPU-only validation oracle, not evidence of GPU execution.
+Run the GPU gate with `npx tsx hardening/validate-m4.ts` followed by
+`<CUDA-enabled-python> hardening/validate-m4.py`. See `CLAUDE.md` and `hardening/report-m4.md`.
+
 ## Commands
 
 ```

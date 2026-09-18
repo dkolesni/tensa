@@ -395,7 +395,7 @@ export function RunView({ report }: { report: RunReport }) {
         <Stat label="backend errors" value={String(report.errors.length)} />
       </div>
 
-      <Panel title="forward execution">
+      <Panel title="forward — CPU reference interpreter (validation)">
         <ul className="space-y-1 font-mono text-[11.5px]">
           {report.forward.map((f) => (
             <li key={f.model} className="flex flex-wrap gap-2">
@@ -410,7 +410,7 @@ export function RunView({ report }: { report: RunReport }) {
       </Panel>
 
       {series.length > 0 && (
-        <Panel title="training — reference backend">
+        <Panel title="training — CPU reference interpreter (validation)">
           <LossChart series={series} colors={colors} />
           <div className="mt-2 flex flex-wrap gap-3 text-[11px]">
             {series.map((s, i) => (

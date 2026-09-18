@@ -209,7 +209,10 @@ model MultiTask(x: Tensor[B, 128]) -> (Logits[B, 10], Tensor[B, 1]) {
 let (logits, value) = MultiTask(x)
 \`\`\`
 
-Objectives consume them by position or by port name: \`Value(pred: Net(x)[1], target: value)\`.`,
+Objectives consume them by position or by port name: \`Value(pred: Net(x)[1], target: value)\`.
+Projections of the same tuple-valued call within ONE loss share a forward pass (including its
+random draws and state updates). Separate losses/updates run fresh forwards; unindexed applications
+remain independent. This distinction matters for VAE and diffusion targets (F-023).`,
   },
   {
     id: "topology",
@@ -338,8 +341,10 @@ model Centered(x: Tensor[B, D]) -> Tensor[B, D] {
 }
 \`\`\`
 
-\`observe\` reads the current value and schedules the declared update; it updates in training context
-and is read-only in evaluation context. \`batchnorm\` uses exactly the same mechanism internally.
+\`observe\` applies the declared update immediately in training context and returns the updated
+value; in evaluation it returns the existing value without writing. Save a pre-update graph value
+explicitly when computing against the old bank. BatchNorm likewise owns persistent state, but uses
+its own convention: population variance for normalization, unbiased variance for running statistics.
 Everything with a state kind appears in the checkpoint coverage report.
 
 ## Effects
@@ -460,8 +465,12 @@ train DigitRun {
 \`\`\`
 
 Derived automatically: gradient zeroing, forward, loss evaluation, backward, optimizer step,
-train/eval context switching, device movement, precision placement, validation, checkpointing and
-gradient clipping.
+train/eval context switching, device movement, validation, checkpointing and gradient clipping.
+Mixed precision remains an annotation, not implemented autocasting.
+
+**GPU is required by default.** The PyTorch backend selects CUDA (or MPS); no available GPU is an
+error, never an implicit CPU fallback. Explicit \`device cpu\` or Python \`device="cpu"\` opts into CPU.
+The Run tab/\`run\` command explicitly selects the CPU reference interpreter for validation only.
 
 ## The temporal vocabulary
 
@@ -520,8 +529,8 @@ phase adversarial {
 
 ## Curriculum
 
-\`phase easy { epochs 2 until val_acc > 0.6 }\` — an event condition on a metric, evaluated between
-steps.
+\`phase easy { epochs 2 until val_main < 0.6 }\` — an event condition on an available loss metric,
+evaluated between steps. A metric with no producer is AXS0709.
 
 ## Escape hatch
 
@@ -558,13 +567,11 @@ Currently restricted:
 - **data-dependent branching on tensor values** inside a graph (\`if tensor > 0 then A else B\`)
 - **data-dependent shapes** (a length that depends on runtime values)
 
-Why: the first is an *implementation* restriction — the IR has no \`cond\` node yet — and the second is
-*semantic*: static shape contracts are the core value proposition, and a shape that no longer has a
-symbolic expression breaks every downstream contract.
-
-What is **not** restricted: branching whose arms have identical static contracts is a legitimate
-design and the intended next extension (\`select(cond, a, b)\` exists today as an eager elementwise
-form). Nothing in the type system requires banning it.
+The IR has no \`cond\` node, and the tensor catalog has neither \`where/select\` nor \`topk\`.
+(The data-plane \`select\` selects fields, not tensors.) Equal-contract branching is a candidate,
+not a promised next extension. Variable output cardinality additionally loses static shape knowledge.
+M4's seven-case disposition separates bounded scan, eager selection, future conditional execution,
+custom regions and host algorithms before proposing any syntax.
 
 Escape today: a \`custom op\` may implement the dynamic region, declare its contracts and effects, and
 keep static reasoning downstream. If it cannot state its output shape, AXS0903 reports the loss of
@@ -575,7 +582,9 @@ knowledge rather than pretending certainty.`,
     title: "Custom operations and the catalog",
     blurb: "A missing layer is a library problem, not a compiler problem.",
     body: `The catalog is **library vocabulary**: linear, conv2d, embedding, positional, attention,
-layernorm, rmsnorm, batchnorm, dropout, pooling, activations, tensor primitives and losses. Flow,
+layernorm, rmsnorm, batchnorm, dropout, randn_like, pooling, activations, tensor primitives and losses.
+\`randn_like(x)\` draws independent standard-normal floats with x's shape, in **both** train and eval;
+it has a stochastic effect, no gradient to its shape template, and does not disable reparameterization. Flow,
 topology, tensor mathematics, parameter identity, state, objectives, data and lifecycle are
 **language semantics**.
 
@@ -970,8 +979,10 @@ export const LIMITATIONS = `## Known limitations
 
 - **No data-dependent control flow in the static core.** There is no \`cond\` IR node yet. Branching
   whose arms share a static contract is a designed extension, not a semantic prohibition.
-- **The reference backend is an interpreter.** Convolution is a naive loop; large models are slow in
-  the browser. Runs use small runtime dimensions and a small step budget.
+- **GPU required for default PyTorch execution.** CUDA/MPS selection fails if neither is available;
+  CPU requires explicit selection. M4 was executed on CUDA, not merely emitted as text.
+- **The reference backend is explicitly CPU-only validation.** Convolution is a naive loop; large
+  models are slow. Reference results do not satisfy the GPU execution gate.
 - **Data execution is simulated.** Source adapters are declared and checked but not executed: the
   reference backend feeds deterministic synthetic tensors that match the declared example contracts.
   Pipelines are analysed (effects, leakage, shape effects), not run.
@@ -979,9 +990,15 @@ export const LIMITATIONS = `## Known limitations
   and tracked shadows are honoured (one epoch = 6 synthetic steps), but the metrics an \`until\` reads
   are losses over synthetic batches — the run report tells you *whether* a rule fires, not *when* it
   would on real data.
+- **Research boundaries remain explicit.** WGAN-GP fails at \`grad\` (AXS0204); top-k MoE fails at
+  \`topk\`/\`where\` (AXS0204). MAML is skipped pending a differentiation model. Toy RL represents
+  fixed-trajectory updates; environment interaction, actions, returns and rollout refresh are host-side.
+- **Shapes do not prove layouts.** ViT patch order repeats the MHA head-merge witness (G-cand-004).
+  Side bindings still redirect the cursor (G-cand-005); no semantics were changed.
 - **A tracked shadow is write-only.** \`track t = ema(region, rate: r)\` reaches the checkpoint and the
-  emitted plan, but no model can be evaluated with it (G-cand-003, proposal stage).
-- **Semantic kinds are shallow.** Six kinds with warnings, no user-defined refinements, no unit or
+  emitted plan, but no model can be evaluated with it (G-cand-003, proposal stage). MoCo's queue works;
+  its key encoder is independent, NOT an EMA encoder. BN buffer ownership and per-call mode remain open.
+- **Semantic kinds are shallow.** Seven kinds with warnings, no user-defined refinements, no unit or
   layout tracking.
 - **No distributed or sharding semantics.** Execution policy currently covers device, precision,
   gradient clipping and seeds only.
@@ -1039,11 +1056,27 @@ getting bytes off a disk is not* — is defensible and checkable. Leakage checki
 was worth doing: it is a correctness property no framework-level API can offer.
 
 **11. Lifecycle: six concepts, no loop.**
-Phase, step, update, schedule, event and training state covered every algorithm in the hardening set
-(fine-tuning, GAN, curriculum, EMA teacher). The moment a seventh concept looked necessary, it was
-always an escape-hatch case — so the escape hatch is documented instead.`;
+Phase, step, update, schedule, event and training state cover ordinary fine-tuning, GAN updates and
+curriculum. M3–M4 disproved the stronger EMA-teacher claim: a tracked shadow cannot be consumed by a
+model. Differentiation, derived parameter sets and rollout refresh are documented research boundaries,
+not evidence that the existing six concepts cover every algorithm.`;
 
-export const REPORT = `## Final report
+export const REPORT = `## Hardening report — through Milestone 4
+
+M4 adds DenseNet, ViT, encoder–decoder attention, VAE, LoRA, a MoCo queue/independent-key subset,
+diffusion and a fixed-trajectory policy/value update; distillation now uses a residual teacher and
+T=2 soft targets. WGAN-GP and sparse MoE are expected rejections; MAML is explicitly skipped.
+No grammar changes were made. Full findings: hardening/report-m4.md and records/revalidation-2026-09.md.
+
+**Executed GPU evidence:** torch 2.11.0+cu128 on RTX 4090: nine compiling challenges, thirteen model
+graphs and seven plans. Aligned parameters/inputs/noise verify forward values and parameter gradients;
+train/eval state, checkpoint restoration and GPU batch transfer are checked. CPU reference execution
+is a separate, explicitly CPU-only oracle. GPU is required by default; CPU is an explicit opt-in.
+
+**New fixes:** randn_like catalog/runtime/lowering (H-010), GPU placement and no-fallback policy
+(H-011), tuple-forward coherence (F-023), boolean mask fixtures (F-024), empty attention rows (F-025),
+invalid labels (F-026), signed floor proofs (F-027), numerical equivalence guards (F-028), BatchNorm
+running variance (F-029), and unknown-rank slice propagation (F-030). Research gaps were not hidden by custom-op identity substitutes.
 
 ### What became simpler than PyTorch, and why
 - **Shape plumbing disappeared.** Input widths, channel counts, flattened sizes and head dimensions are
@@ -1074,7 +1107,8 @@ learning-rate programmes and curriculum conditions. These are the algorithm. TEN
 - The derived default phase hides the update/optimizer pairing when only one of each exists.
 
 ### Where backend leakage remains
-- \`precision mixed\` and \`device auto\` are execution-policy annotations that only some backends honour.
+- \`precision mixed\` is still only an annotation. PyTorch \`device auto\` now requires GPU;
+  \`device cpu\` explicitly opts into CPU. Placement stays backend policy, not tensor source.
 - The reference backend's capability table (conv2d "naive im2col; small inputs only") reaches the run
   report — intentionally, but it is still backend information in a user-facing surface.
 - Custom ops embed literal backend source text.
@@ -1097,9 +1131,10 @@ adversarial training's input gradient, MAML — G-cand-002, three witnesses); a 
 environment interaction is not a data pipeline; kernels with no shape semantics.
 
 ### What would need to change before serious research use
-An executable data plane (real adapters), a \`cond\` IR node, gradient-level programming
-(\`grad(loss, wrt: region)\` as a first-class value), distributed/sharding policy, a compiled backend
-rather than an interpreter, and a versioned IR format with a checkpoint schema.
+An executable data plane, a reviewed differentiation model and derived-set/state ownership model,
+distributed/sharding policy, and versioned IR/checkpoint formats. M4's analyses are prerequisites,
+not approval to add \`grad\` or \`cond\`. First-order input gradients, differentiable penalties and
+parameter-set inner updates have different requirements.
 
 ### What should **not** be added
 An encyclopedia of architecture keywords; general-purpose control flow; classes and inheritance;

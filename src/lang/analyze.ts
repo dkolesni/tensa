@@ -14,7 +14,7 @@ import {
 } from "./ast";
 import { CATALOG_MAP, DATA_OP_MAP, InferCtx, OpSpec } from "./catalog";
 import {
-  DimExpr, asConst, asVar, atomDef, dAdd, dConst, dDiv, dEquals, dMul, dSub, dVar, freeVars, isNonZero, show, substitute,
+  DimExpr, asConst, asVar, lowerBound, dAdd, dConst, dDiv, dEquals, dMul, dSub, dVar, freeVars, isNonZero, show, substitute,
 } from "./dims";
 import {
   IRAttr, IRData, IRDataField, IRGraph, IRLoss, IRModule, IRNode, IROptimizer, IRParam,
@@ -276,27 +276,16 @@ export class Analyzer {
 
   /**
    * prove / refute / carry a symbolic bound `a ≤ b` (slice and index ranges,
-   * F-011).  Dimension atoms are ≥ 1 (variables) or ≥ 0 (floor divisions), so a
-   * difference whose coefficients are all non-negative is proved and one whose
-   * coefficients are all negative (and cannot vanish) is refuted; anything else
-   * is carried as an `assumed` `<=` constraint that the runtime verifies.
+   * F-011 / F-027). A sound lower bound proves or refutes the difference;
+   * floor atoms may be negative. Anything else is carried to runtime.
    */
   leDim(a: DimExpr, b: DimExpr, origin: string, loc: Loc): boolean {
     const env = this.frame ? this.frame.dimEnv : new Map<string, DimExpr>();
     const ae = substitute(a, env);
     const be = substitute(b, env);
     const diff = dSub(be, ae);
-    if (diff.terms.every((t) => t.coef >= 0)) return true;
-    // `T - 1 ≥ 0` holds because every plain-variable monomial is ≥ 1: a negative
-    // constant is absorbed when the positive variable coefficients cover it
-    const negConst = diff.terms.find((t) => t.vars.length === 0 && t.coef < 0);
-    if (negConst && diff.terms.every((t) => t === negConst || t.coef > 0)) {
-      const cover = diff.terms
-        .filter((t) => t !== negConst && t.vars.every((v) => atomDef(v).kind === "var"))
-        .reduce((s, t) => s + t.coef, 0);
-      if (cover + negConst.coef >= 0) return true;
-    }
-    if (diff.terms.every((t) => t.coef < 0) && isNonZero(diff)) {
+    if (lowerBound(diff) >= 0) return true;
+    if (lowerBound(dSub(ae, be)) > 0) {
       this.mod.constraints.push({ lhs: ae, rhs: be, rel: "<=", status: "failed", origin, loc });
       const c = asConst(diff);
       this.err("AXS0410", `${origin}: ${show(ae)} exceeds ${show(be)}`, loc, [
@@ -1168,6 +1157,19 @@ export class Analyzer {
     if (!v || !isTensor(v.type)) {
       this.err("AXS0408", "indexing requires a tensor", loc);
       return { v: "none" };
+    }
+    if (v.type.unknown) {
+      // F-030: unknown rank is not rank zero. Preserve the slice for runtime,
+      // without inventing static bounds or a result shape.
+      const out = unknownTensor();
+      const outs = this.emit("slice", [v.id], {
+        dynamic: true,
+        kinds: slices.map(s => s.s),
+        from: slices.map(s => s.s === "index" ? this.dimOf(s.value) : s.s === "range" && s.from ? this.dimOf(s.from) : dConst(0)),
+        to: slices.map(s => s.s === "range" && s.to ? this.dimOf(s.to) : dConst(0)),
+        openTo: slices.map(s => s.s === "range" && s.to ? 0 : 1),
+      }, [out], { loc });
+      return { v: "val", id: outs[0].id, type: out };
     }
     const shape = v.type.shape;
     const specs: { axis: number; from: DimExpr; to: DimExpr; drop: boolean }[] = [];

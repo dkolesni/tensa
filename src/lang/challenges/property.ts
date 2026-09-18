@@ -9,6 +9,10 @@ import { compile } from "../analyze";
 import { inspectModule } from "../inspect";
 import { TensorType } from "../types";
 import { allNodes } from "./driver";
+import { dAdd, dSub, dMul, dDiv, dConst, dVar, dEquals, evalDim, isNonZero, lowerBound } from "../dims";
+import { RESEARCH_CHALLENGES } from "./research";
+import { LEARNING_CHALLENGES } from "./learning";
+import { assertEquivalent } from "./metamorphic";
 
 export class Rng {
   private s: number;
@@ -198,7 +202,122 @@ ${widths.map((w) => `  linear(${w})\n  gelu`).join("\n")}
   },
 };
 
+export const algebraOutcomes: Property = {
+  name: "eqDim/leDim outcomes are exclusive and rewrite-stable; floor signs are sound (F-027)",
+  gen(r) {
+    const k = r.int(2, 8);
+    const code = `dim B\ndim T\ndim S\nmodel M(x: Tensor[B, T]) -> Tensor[B, ${k}*T - ${k-1}*T] { return x }`;
+    return { code, label: `coefficient ${k}`, check() {
+      assert(compile(code).ok, "rewritten identity rejected");
+      const states = (src: string, origin: string) => {
+        const c = compile(src);
+        const found = new Set(c.mod.constraints.filter(x => x.origin.includes(origin)).map(x => x.status));
+        assert(found.size <= 1, `contradictory outcomes: ${[...found]}`);
+        return found.size ? [...found][0] : "proved";
+      };
+      for (const [rhs, expected] of [["T", "proved"], ["T+1", "failed"], ["S", "assumed"]]) {
+        for (const rewrite of [rhs, `(${rhs}) + ${k}*T - T*${k}`]) {
+          const src = `dim B\ndim T\ndim S\nmodel M(x: Tensor[B,T]) -> Tensor[B,${rewrite}] { return x }`;
+          assert(states(src, "result of 'M' axis 1") === expected, `eq ${rewrite} != ${expected}`);
+        }
+      }
+      for (const [end, expected] of [["T", "proved"], ["T+1", "failed"], ["S", "assumed"]]) {
+        for (const rewrite of [end, `(${end}) + ${k}*T - T*${k}`]) {
+          const src = `dim B\ndim T\ndim S\nmodel M(x: Tensor[B,T]) -> Tensor[B,${end}] { return x[:,0:${rewrite}] }`;
+          assert(states(src, "slice end on axis 1") === expected, `le ${rewrite} != ${expected}`);
+        }
+      }
+      const unknown = compile(`dim B\ndim T\ncustom op opaque(x: Tensor[B,T]) -> Tensor[B,T] { shape: unknown }\nmodel M(x: Tensor[B,T]) -> Tensor[B,T] { return opaque(x) }`);
+      assert(unknown.ok && unknown.mod.diags.some(d => d.code === "AXS0903"), "unknown not preserved");
+      assert(!unknown.mod.constraints.some(c => c.origin.includes("result of 'M'")), "unknown invented a shape constraint");
+      const sliced = compile(`dim B\ndim T\ncustom op opaque(x: Tensor[B,T]) -> Tensor[B,T] { shape: unknown }\nmodel M(x: Tensor[B,T]) -> Tensor[B,T] { return opaque(x)[:,0:T] }`);
+      assert(sliced.ok && !sliced.mod.constraints.some(c => c.origin.includes("slice")), "unknown rank became false slice bounds (F-030)");
+      const t = dVar("T"), n = dConst(k);
+      assert(dEquals(dMul(n, dAdd(t, dConst(1))), dAdd(dMul(t,n),n)), "distributivity");
+      const expr = dAdd(dConst(1), dDiv(dSub(dConst(1), t), dConst(2)));
+      assert(!isNonZero(expr) && lowerBound(expr) < 0, "negative floor atom used as a positive proof");
+      for (let value = 1; value <= 16; value++) {
+        const v = evalDim(expr, new Map([["T", value]]))!;
+        assert(v === 1 + Math.floor((1-value)/2), "floor rewrite changed value");
+        assert(lowerBound(expr) <= v, "unsound bound");
+      }
+      const signed = compile(`dim B\ndim T\nmodel M(x: Tensor[B,2+(1-T)/2]) -> Tensor[B,1] { return x }`);
+      assert(signed.ok && signed.warnings.some(d => d.code === "AXS0403"), "satisfiable signed-floor equality refuted");
+    } };
+  },
+};
+
+export const nestedIdentity: Property = {
+  name: "nested for/scan preserves shared identity and fresh-stage owner paths",
+  gen(r) {
+    const a = r.int(1,3), b = r.int(1,3), time = r.int(2,5);
+    const code = `dim B\ndim T\nblock Cell(x: Tensor[B,4]) -> Tensor[B,4] { linear(4) ; tanh }\nmodel M(x: Tensor[B,T,4]) -> Tensor[B,T,4] {
+      let cell = Cell()
+      let (ys, last) = scan over x axis: 1 carry h: Tensor[B,4] init: zeros {
+        step + h
+        for ${a} { for ${b}: cell }
+        yield tanh()
+      }
+      return ys
+    }`;
+    return { code, label: `${a}x${b}, T=${time}`, check() {
+      const shared = compile(code), fresh = compile(code.replace(`for ${b}: cell`, `for ${b}: Cell()`));
+      assert(shared.ok && fresh.ok, [...shared.errors, ...fresh.errors].map(d => d.message).join(";"));
+      assert(shared.mod.params.length === 2, "shared params duplicated");
+      assert(fresh.mod.params.length === 2*a*b, "fresh params tied across iterations");
+      assert(new Set(fresh.mod.params.map(p => p.id)).size === 2*a*b, "identity collision");
+      assert(shared.mod.params.every(p => p.owner === "M/cell/linear#1"), "shared path escaped lexical owner");
+      assertEquivalent(code, code.replace(/\bcell\b/g, "renamed"), { ignore: ["cell", "renamed"], run: { dims: { B:2, T:time } } });
+    } };
+  },
+};
+
+export const recursiveEffects: Property = {
+  name: "effect unions survive nested functions, residuals, repeats and scan (F-016)",
+  gen(r) {
+    const depth = r.int(1,3);
+    const code = `dim B\ndim T
+fn f(x: Tensor[B,4]) -> Tensor[B,4] { return x |> batchnorm |> dropout(0.2) |> stop_grad }
+model M(x: Tensor[B,T,4]) -> Tensor[B,T,4] {
+  let (ys, last) = scan over x axis: 1 carry h: Tensor[B,4] init: zeros {
+    step + h
+    for ${depth} { residual { f() } }
+    yield tanh()
+  }
+  return ys
+}`;
+    return { code, label: `depth ${depth}`, check() {
+      const c = compile(code); assert(c.ok, c.errors.map(d => d.message).join(";"));
+      for (const n of allNodes(c.mod).filter(n => n.regions?.length)) {
+        const effects = new Set<string>();
+        const walk = (ns: typeof n[]) => { for (const x of ns) { x.effects.filter(e => e !== "pure").forEach(e => effects.add(e)); for (const reg of x.regions ?? []) walk(reg.nodes); } };
+        for (const reg of n.regions!) walk(reg.nodes);
+        for (const e of effects) assert(n.effects.some(x => x === e), `${n.op} lost ${e}`);
+      }
+    } };
+  },
+};
+
+export const researchParserMutants: Property = {
+  name: "seeded parser evil twins against every M4 program terminate with syntax diagnostics",
+  gen(r) {
+    const mutation = r.int(0,2);
+    return { code: "all RESEARCH_CHALLENGES", label: `mutation ${mutation}`, check() {
+      for (const ch of [...RESEARCH_CHALLENGES, ...LEARNING_CHALLENGES.filter(c => c.id === "distillation")]) {
+        const code = mutation === 0 ? ch.code.slice(0, ch.code.lastIndexOf("}")) : mutation === 1 ? ch.code.replace("->", "=>") : ch.code.replace("model ", "model : ");
+        const c = compile(code);
+        assert(c.errors.some(d => /^AXS01/.test(d.code)), `${ch.id}: mutation ${mutation} not rejected by parser: ${c.errors.map(d=>d.code)}`);
+        assert(c.errors.every(d => d.loc.line >= 1 && d.loc.col >= 1), "diagnostic lost location");
+      }
+    } };
+  },
+};
+
 export const PROPERTIES: Property[] = [
+  algebraOutcomes,
+  nestedIdentity,
+  recursiveEffects,
+  researchParserMutants,
   reshapePreservesCount,
   concatSumsAxis,
   residualPreservesShape,

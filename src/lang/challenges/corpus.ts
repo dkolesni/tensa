@@ -6,6 +6,7 @@
  * Section tags refer to tensa_hardening_plan.md.
  */
 import { LEARNING_CHALLENGES } from "./learning";
+import { RESEARCH_CHALLENGES, RESEARCH_METAMORPHIC } from "./research";
 import { SEMANTIC_CHALLENGES } from "./semantic";
 import { TENSOR_CHALLENGES, TENSOR_METAMORPHIC } from "./tensor";
 import { Challenge } from "./types";
@@ -155,7 +156,7 @@ model Tied(a: Tensor[B, 4], b: Tensor[B, 6]) -> (Tensor[B, E], Tensor[B, E]) {
 ];
 
 /** Milestone 1 (semantic core) lives in semantic.ts, Milestone 2 (tensor completeness) in tensor.ts. */
-export const CHALLENGES: Challenge[] = [...BASE_CHALLENGES, ...SEMANTIC_CHALLENGES, ...TENSOR_CHALLENGES, ...LEARNING_CHALLENGES];
+export const CHALLENGES: Challenge[] = [...BASE_CHALLENGES, ...SEMANTIC_CHALLENGES, ...TENSOR_CHALLENGES, ...LEARNING_CHALLENGES, ...RESEARCH_CHALLENGES];
 
 // ---------------------------------------------------------------- §37 metamorphic pairs
 
@@ -265,4 +266,5 @@ model M(x: Tensor[B, 3, H, H]) -> Tensor[B, 3, H, H] { maxpool2d(2) ; upsample(2
   },
   // ---------------------------------------------------------------- Milestone 2 pairs (tensor.ts)
   ...TENSOR_METAMORPHIC,
+  ...RESEARCH_METAMORPHIC,
 ];

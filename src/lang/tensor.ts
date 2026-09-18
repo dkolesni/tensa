@@ -87,6 +87,13 @@ export function randn(): number {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
+/** H-010: sampling is independent of the template values and of train/eval mode. */
+export function randnLike(x: T): T {
+  const out = new T([...x.shape]);
+  for (let i = 0; i < out.size; i++) out.data[i] = randn();
+  return out;
+}
+
 // ------------------------------------------------------------------ broadcasting
 
 function bshape(a: number[], b: number[]): number[] {
@@ -698,6 +705,13 @@ export function maskedFill(x: T, mask: T, value: number): T {
   );
 }
 
+/** F-026: never silently turn an invalid label into a different class. */
+export function classIndex(value: number, classes: number): number {
+  if (!Number.isInteger(value) || value < 0 || value >= classes)
+    throw new Error(`class index ${value} is outside [0, ${classes})`);
+  return value;
+}
+
 export function crossEntropy(logits: T, labels: T): T {
   const D = logits.shape[logits.shape.length - 1];
   const n = logits.size / D;
@@ -714,7 +728,7 @@ export function crossEntropy(logits: T, labels: T): T {
       s += e;
     }
     for (let c = 0; c < D; c++) probs[i * D + c] /= s;
-    const t = Math.max(0, Math.min(D - 1, Math.round(labels.data[i])));
+    const t = classIndex(labels.data[i], D);
     loss += -Math.log(Math.max(probs[i * D + t], 1e-12));
   }
   out.data[0] = loss / n;
@@ -724,7 +738,7 @@ export function crossEntropy(logits: T, labels: T): T {
       const gl = logits.ensureGrad();
       const g = out.g![0] / n;
       for (let i = 0; i < n; i++) {
-        const t = Math.max(0, Math.min(D - 1, Math.round(labels.data[i])));
+        const t = classIndex(labels.data[i], D);
         for (let c = 0; c < D; c++) gl[i * D + c] += g * (probs[i * D + c] - (c === t ? 1 : 0));
       }
     },

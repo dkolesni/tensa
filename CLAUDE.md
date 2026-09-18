@@ -110,6 +110,18 @@ holds the larger view components (`Editor`, `DiagnosticList`, `InspectView`, `Ru
 
 ### Conventions worth knowing
 
+- **GPU execution is required by default (2026-09-18).** Generated PyTorch models/plans select
+  CUDA (or MPS) and fail clearly if no GPU exists; never silently fall back to CPU. CPU requires
+  explicit `device cpu` in a plan or `device="cpu"` at the generated Python entry point.
+  The browser/Node reference interpreter is explicitly a CPU-only validation oracle, not a GPU run.
+  M4 fidelity gate: `npx tsx hardening/validate-m4.ts`, then run `hardening/validate-m4.py` with a
+  CUDA-enabled Python. The harness defaults to GPU; `--device cpu` is an explicit exception.
+- M4 corpus: `research.ts` exports `RESEARCH_CHALLENGES`, appended in `corpus.ts`; records and
+  `hardening/report-m4.md` distinguish compiling subsets from unsupported complete algorithms.
+  `randn_like` is catalog vocabulary: independent standard-normal draws in train AND eval,
+  no gradient to the template. Loss bindings projecting the same tuple call share one forward
+  within that loss evaluation (F-023), never across updates or separate losses.
+
 - Diagnostic codes (`AXS####`) in `types.ts` are stable identifiers — never renumber or reuse one;
   add new codes at the end of their range.
 - `TensorKind` (`Tensor`, `Tokens`, `Class`, `Mask`, `Logits`, `Probs`, `Image`) is a refinement

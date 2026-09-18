@@ -11,7 +11,7 @@ import { OP_SHAPE_CASES, checkOpCase, uncoveredOps } from "./challenges/ops";
 import { PROPERTIES, checkProperty } from "./challenges/property";
 import { EXAMPLES } from "./examples";
 import { emitTorch } from "./emit_torch";
-import { Runtime, runProgram } from "./exec";
+import { Runtime, runProgram, syntheticField } from "./exec";
 import { inspectModule } from "./inspect";
 import { IRModule, IRNode, printIR } from "./ir";
 import * as X from "./tensor";
@@ -900,7 +900,7 @@ model M(x: Tensor[B, T, D], kv: Tensor[B, S, D], pad: Mask[B, 1, S], cls: Tokens
     assert(code.includes('dims = resolve_dims({**self.dims, "B": x.shape[0], "T": x.shape[1], "S": kv.shape[1]})'), "forward must bind B, T, S from the input shapes");
     assert(code.includes('.reshape(dims["B"], dims["T"], 4, 4)'), "symbolic reshape uses the bound dims");
     assert(code.includes('[0:dims["B"], 0:(dims["T"] - 1), 0:16]'), "symbolic slice uses the bound dims");
-    assert(code.includes('torch.ones(dims["T"], dims["T"], dtype=torch.bool)'), "causal_mask sized from T, not 1");
+    assert(code.includes('torch.ones(dims["T"], dims["T"], dtype=torch.bool, device=device)'), "causal_mask sized from T, not 1");
     assert(code.includes('F.one_hot(vv') && code.includes('.long(), dims["T"])'), "one_hot sized from T, not 2");
     assert(code.includes("m = ~vv") && code.includes("[:, None]") && code.includes("attn_mask=m"), "the mask port reaches SDPA as an inverted, head-broadcast attn_mask");
     assert(code.includes("torch.tril(") && !code.includes("is_causal=True"), "causal + mask combine into one attn_mask (SDPA forbids both)");
@@ -1016,6 +1016,119 @@ model M(x: Tensor[B, 2, 4, 4]) -> Tensor[B, 4, 4, 4] {
     t("metamorphic", `${m.id} (${m.section})`, () => assertEquivalent(m.a, m.b, { run: m.run, ignore: m.ignore, ir: m.ir }));
 
   for (const p of PROPERTIES) t("property", p.name, () => checkProperty(p));
+
+  t("backend", "GPU is required by default, CPU is explicit and graph allocations follow the device (H-011)", () => {
+    const code = emitTorch(compile(CHALLENGES.find(c => c.id === "encoder-decoder")!.code).mod);
+    for (const token of ['def execution_device(requested=None)', 'TENSA requires a GPU', 'device=device, **dims', 'batch = move_batch(batch, device)', 'device = self._device_anchor.device'])
+      assert(code.includes(token), `missing ${token}`);
+    assert(!code.includes('else "cpu"'), "silent CPU fallback");
+    const cpu = emitTorch(compile(CHALLENGES.find(c => c.id === "lora")!.code.replace('phase tune', 'device cpu\n  phase tune')).mod);
+    assert(cpu.includes('else "cpu")'), "explicit source CPU policy ignored");
+    return "device allocation and transfer pinned; executable GPU gate in hardening/validate-m4.py";
+  });
+
+  t("backend", "tuple loss projections share one stochastic forward, fresh each loss (F-023)", () => {
+    const src = `dim B
+model M(x: Tensor[B,2]) -> (Tensor[B,2], Tensor[B,2]) {
+  let h = x |> linear(2)
+  let y = h + randn_like(h)
+  return (y,y)
+}
+objective L(a: Tensor[B,2], b: Tensor[B,2]) -> Scalar { return mse(a,b) }
+train Fit {
+  model m = M
+  loss same = L(a: m(x)[0], b: m(x)[1])
+  optimizer opt = adam(lr: 0.001)
+  epochs 1
+}`;
+    const c = compile(src); assert(c.ok, c.errors.map(d=>d.message).join(";"));
+    const r = runProgram(c.mod, { maxSteps: 3 });
+    assert(!r.errors.length && r.losses.length === 3, r.errors.join(";"));
+    assert(r.losses.every(l => l.values.same === 0), JSON.stringify(r.losses));
+    const emitted = emitTorch(c.mod);
+    assert(emitted.includes('projected(cache, "m(x)", lambda: m(batch["x"]), 0)') && emitted.includes('cache = {}  # fresh'), "emitter lacks per-loss tuple cache");
+    return "three losses exactly zero; tuple fields use one draw";
+  });
+
+  t("backend", "synthetic masks are boolean and fully blocked attention has zero context/gradient (F-024, F-025)", () => {
+    const mask = syntheticField([128], "Mask", 0, 1);
+    assert(mask.data.every(v => v === 0 || v === 1) && mask.data.includes(0) && mask.data.includes(1), "non-boolean mask fixture");
+    const c = compile(`dim B\nmodel M(x: Tensor[B,3,4], m: Mask[B,1,3]) -> Tensor[B,3,4] { return attention(query: x, mask: m, heads: 2) }`);
+    assert(c.ok, "compile");
+    const rt = new Runtime(c.mod, { dims: { B:2 } }); rt.allocate();
+    X.beginTape();
+    const [out] = rt.evalGraph(c.mod.graphs[0], [X.full([2,3,4],1), X.full([2,1,3],1)]);
+    assert(out.data.every(v => v === 0), "fully blocked query leaked values");
+    X.backward(X.meanAll(out));
+    assert([...rt.params.values()].every(p => !p.g || p.g.every(v => v === 0)), "fully blocked row leaked gradients");
+    return "true = blocked, including empty attention rows";
+  });
+
+  t("backend", "BatchNorm stores unbiased running variance but normalizes with population variance (F-029)", () => {
+    const c = compile('model M(x: Tensor[2,1]) -> Tensor[2,1] { batchnorm(momentum: 0.1) }');
+    assert(c.ok, "compile");
+    const rt = new Runtime(c.mod); rt.allocate(); rt.training = true;
+    const [out] = rt.evalGraph(c.mod.graphs[0], [X.fromArray([2,1],[1,3])]);
+    const variance = [...rt.states].find(([id]) => id.endsWith("running_var"))![1].data[0];
+    assert(Math.abs(variance - 1.1) < 1e-6, `variance ${variance}, expected .9*1 + .1*2`);
+    assert(Math.abs(out.data[0] + 1) < 1e-4, "training normalized with unbiased variance");
+    return "population forward, unbiased persistent variance";
+  });
+
+  t("shapes", "unknown rank survives slicing and keeps a runtime slice rather than an identity (F-030)", () => {
+    const c = compile(`custom op opaque(x: Tensor[2,4]) -> Tensor[2,4] { shape: unknown backend torch: "x" }\nmodel M(x: Tensor[2,4]) -> Tensor[2,2] { return opaque(x)[:,1:3] }`);
+    assert(c.ok, c.errors.map(d => d.message).join(";"));
+    const rt = new Runtime(c.mod); rt.allocate();
+    const g = c.mod.graphs[0];
+    const slice = g.nodes.find(n => n.op === "slice")!;
+    // Supply an actual foreign-op result: AXS0901's placeholder is not a reference implementation.
+    rt.env.set(slice.inputs[0], X.fromArray([2,4],[0,1,2,3,4,5,6,7])); rt.evalNode(slice);
+    const output = rt.get(slice.outputs[0]);
+    assert(output.shape.join() === '2,2' && [...output.data].join() === '1,2,5,6', "slice lost at unknown boundary");
+    assert(!!(c.mod.values.get(slice.outputs[0])!.type as TensorType).unknown, "unknown became a guessed shape");
+    assert(emitTorch(c.mod).includes('[:, 1:3]'), "emitter dropped dynamic slice");
+    return "unknown statically, actual indexed result dynamically";
+  });
+
+  t("backend", "invalid class indices are refused instead of silently clamped (F-026)", () => {
+    for (const bad of [-1,3,10,0.5,NaN]) {
+      let refused = false;
+      try { X.crossEntropy(X.full([1,3],0), X.fromArray([1],[bad])); } catch { refused = true; }
+      assert(refused, `accepted ${bad}`);
+    }
+    return "negative, out-of-range, fractional and non-finite labels refused";
+  });
+
+  t("metamorphic", "ViT patch permutation is a second shape-blind layout witness (E-007, G-cand-004)", () => {
+    const vit = CHALLENGES.find(c => c.id === "vit")!.code;
+    const wrong = vit.replace('transpose(transpose(transpose(grid, 1, 2), 2, 4), 3, 4)', 'grid');
+    assert(compile(wrong).ok, "layout mutant should be shape-correct");
+    let error = "";
+    try { assertEquivalent(vit, wrong, { ir: false, run: { dims: { B:2 } } }); } catch(e) { error = (e as Error).message; }
+    assert(error.includes("differs"), error || "wrong patch order passed");
+    return "equal shape, different patch contents";
+  });
+
+  t("flow", "DenseNet side binding and VAE tuple require explicit cursor intent (E-003, G-cand-005)", () => {
+    const dense = CHALLENGES.find(c => c.id === "densenet")!.code;
+    const wrong = compile(dense.replace('let d = c3 |> conv2d(G, kernel: 1)', 'let aux = x |> conv2d(G, kernel: 1)\n  let d = conv2d(G, kernel: 1)'));
+    assert(wrong.ok, "shape-correct cursor mutant failed");
+    const convs = allNodes(wrong.mod).filter(n => n.op === "conv2d");
+    assert(convs[convs.length-1].inputs[0] === convs[convs.length-2].outputs[0], "side let did not redirect cursor");
+    const vae = CHALLENGES.find(c => c.id === "vae")!.code.replace('randn_like(mu)', 'randn_like()');
+    assert(compile(vae).errors.some(d => d.code === "AXS0408"), "tuple became implicit tensor");
+    return "explicit c3 and mu operands carry intent; cursor rule unchanged";
+  });
+
+  t("metamorphic", "numerical equivalence rejects non-finite values and same-size different shapes (F-028)", () => {
+    const bad = `model M(x: Tensor[2,2]) -> Tensor[2,2] { return x / 0.0 }`;
+    for (const [a,b] of [[bad,bad], [bad.replace('x / 0.0','x'), 'model M(x: Tensor[2,2]) -> Tensor[4] { return reshape(x,[4]) }']]) {
+      let refused = false;
+      try { assertEquivalent(a,b,{ir:false,run:{}}); } catch { refused = true; }
+      assert(refused, "false equivalence");
+    }
+    return "NaN/infinity cannot pass via NaN > tolerance; shapes compared before data";
+  });
 
   // §5.3: every catalog op on a fully symbolic input
   t("op-shapes", "every catalog op has a symbolic shape case", () => {

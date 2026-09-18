@@ -352,11 +352,15 @@ export class Runtime {
           let v = X.mul(c, c);
           for (const a of axes.slice().reverse()) v = X.reduce(v, a, true, "mean");
           varr = v;
+          const samples = x.size / C;
+          if (samples <= 1) throw new Error("batchnorm training requires more than one sample per channel");
           const nm = X.zeros([C]);
           const nv = X.zeros([C]);
           for (let i = 0; i < C; i++) {
             nm.data[i] = (1 - mom) * rm.data[i] + mom * mean.data[i];
-            nv.data[i] = (1 - mom) * rv.data[i] + mom * varr.data[i];
+            // F-029: normalize with population variance, store the unbiased estimate,
+            // matching PyTorch BatchNorm's running-statistics convention.
+            nv.data[i] = (1 - mom) * rv.data[i] + mom * varr.data[i] * samples / (samples - 1);
           }
           this.states.set(n.states[0], nm);
           this.states.set(n.states[1], nv);
@@ -368,6 +372,9 @@ export class Runtime {
         set(0, X.add(X.mul(norm, gamma), beta));
         return;
       }
+      case "randn_like":
+        set(0, X.randnLike(ins[0]));
+        break;
       case "dropout":
         set(0, X.dropout(ins[0], Number(n.attrs.p ?? 0.5), this.training));
         return;
@@ -384,19 +391,26 @@ export class Runtime {
         const k = split(X.matmul(k0, P(1)), Tk);
         const v = split(X.matmul(v0, P(2)), Tk);
         let scores = X.scaleT(X.matmul(q, X.transpose(k, 2, 3)), 1 / Math.sqrt(dh));
+        const masks: T[] = [];
         if (n.attrs.causal) {
           const mask = X.zeros([Tq, Tk]);
           for (let i = 0; i < Tq; i++) for (let j = 0; j < Tk; j++) mask.data[i * Tk + j] = j > i ? 1 : 0;
-          scores = X.maskedFill(scores, X.reshape(mask, [1, 1, Tq, Tk]), -1e9);
+          const lifted = X.reshape(mask, [1, 1, Tq, Tk]);
+          masks.push(lifted);
+          scores = X.maskedFill(scores, lifted, -1e9);
         }
         if (ins[3]) {
           // Mask[Tq, Tk] or Mask[B|1, Tq|1, Tk] -> aligned against scores [B, H, Tq, Tk]
           // (a rank-3 mask used to trailing-broadcast its batch axis onto heads, F-012)
           const m = ins[3];
           const m4 = m.shape.length === 3 ? X.reshape(m, [m.shape[0], 1, m.shape[1], m.shape[2]]) : m;
+          masks.push(m4);
           scores = X.maskedFill(scores, m4, -1e9);
         }
-        const w = X.softmax(scores, 3);
+        let w = X.softmax(scores, 3);
+        // F-025: an entirely blocked row has zero context/gradient, as in SDPA,
+        // not the uniform distribution produced by softmax of a finite sentinel.
+        for (const mask of masks) w = X.maskedFill(w, mask, 0);
         const o = X.reshape(X.transpose(X.matmul(w, v), 1, 2), [B, Tq, D]);
         set(0, X.matmul(o, P(3)));
         return;
@@ -479,7 +493,7 @@ export class Runtime {
         const src = ins[0];
         const out = X.zeros([...src.shape, k]);
         for (let i = 0; i < src.size; i++) {
-          const c = Math.max(0, Math.min(k - 1, Math.round(src.data[i])));
+          const c = X.classIndex(src.data[i], k);
           out.data[i * k + c] = 1;
         }
         set(0, out);
@@ -492,6 +506,25 @@ export class Runtime {
         set(0, ins[0]);
         return;
       case "slice": {
+        if (n.attrs.dynamic) {
+          const kinds = n.attrs.kinds as string[];
+          const starts = n.attrs.from as DimExpr[], ends = n.attrs.to as DimExpr[];
+          const openTo = n.attrs.openTo as number[];
+          const axes: number[] = [], from: number[] = [], to: number[] = [], drop: number[] = [];
+          let axis = 0;
+          for (let i = 0; i < kinds.length; i++) {
+            if (kinds[i] === "ellipsis") { axis += ins[0].shape.length - (kinds.length - 1); continue; }
+            const extent = ins[0].shape[axis];
+            if (extent === undefined || axis < 0) throw new Error("too many indices for runtime slice rank");
+            const start = kinds[i] === "all" ? 0 : evalDim(starts[i], this.dimEnv);
+            const end = kinds[i] === "index" && start !== null ? start + 1 : openTo[i] ? extent : evalDim(ends[i], this.dimEnv);
+            if (start === null || end === null || start < 0 || end > extent || start > end)
+              throw new Error("dynamic slice bounds are unresolved or out of range");
+            axes.push(axis++); from.push(start); to.push(end); drop.push(kinds[i] === "index" ? 1 : 0);
+          }
+          set(0, X.sliceT(ins[0], axes, from, to, drop));
+          return;
+        }
         const axes = (n.attrs.axes as number[]) ?? [];
         const from = ((n.attrs.from as DimExpr[]) ?? []).map((d) => evalDim(d, this.dimEnv) ?? 0);
         const to = ((n.attrs.to as DimExpr[]) ?? []).map((d) => evalDim(d, this.dimEnv) ?? 1);
@@ -624,6 +657,9 @@ export function syntheticField(shape: number[], kind: string, vocab: number, idx
   const t = X.zeros(shape);
   if (kind === "Tokens" || kind === "Class") {
     for (let i = 0; i < t.size; i++) t.data[i] = (idx * 7 + i * 3) % Math.max(1, vocab);
+  } else if (kind === "Mask") {
+    // F-024: a Mask is boolean, not a normally distributed feature vector.
+    for (let i = 0; i < t.size; i++) t.data[i] = X.rand() < 0.25 ? 1 : 0;
   } else {
     for (let i = 0; i < t.size; i++) t.data[i] = X.randn() * 0.6 + (idx % 3) - 1;
   }
@@ -727,10 +763,16 @@ export function runProgram(mod: IRModule, opts: RunOptions = {}): RunReport {
      * `augment(x)` and `x` consistent within a step.
      */
     const fieldCache = new Map<string, T>();
+    // F-023: projections of one tuple-valued call share its stochastic/stateful forward.
+    // Unindexed applications remain independent; the cache lives for ONE loss evaluation.
+    const projectionCache = new Map<string, T[]>();
     const evalBinding = (text: string, want: TensorType | null): T => {
       const src = text.trim();
       const call = /^(\w+)\((.*)\)(?:\[(\d+)\])?$/.exec(src);
       if (call && modelGraph(call[1])) {
+        const key = `${call[1]}(${call[2]})`;
+        const cached = call[3] !== undefined ? projectionCache.get(key) : undefined;
+        if (cached) return cached[Number(call[3])];
         const g = modelGraph(call[1])!;
         const argTexts = splitTopLevel(call[2]);
         const args = g.inputs.map((iv, i) => {
@@ -740,6 +782,7 @@ export function runProgram(mod: IRModule, opts: RunOptions = {}): RunReport {
           return syntheticField([batch, ...rt.dims(t.shape.slice(1))], t.kind, guessVocab(mod, t), step + i + 1);
         });
         const outs = rt.evalGraph(g, args);
+        if (call[3] !== undefined) projectionCache.set(key, outs);
         return outs[call[3] ? parseInt(call[3], 10) : 0] ?? outs[0];
       }
       // a data field (or an expression over one): one deterministic tensor per name per step
@@ -759,6 +802,7 @@ export function runProgram(mod: IRModule, opts: RunOptions = {}): RunReport {
       rt.env = new Map();
       rt.training = training;
       fieldCache.clear();
+      projectionCache.clear();
       const portTensors: T[] = obj.inputs.map((b) => {
         const binding = loss.bindings.find((x) => x.port === b.name);
         const want = b.type as TensorType;
@@ -938,12 +982,23 @@ export function runProgram(mod: IRModule, opts: RunOptions = {}): RunReport {
 
 export function guessVocab(mod: IRModule, t: TensorType): number {
   if (t.kind !== "Tokens" && t.kind !== "Class") return 0;
-  const emb = mod.params.find((p) => p.kind === "embedding");
-  if (emb) {
-    const v = evalDim(emb.shape[0], new Map(mod.dims.filter((d) => d.value).map((d) => [d.name, evalDim(d.value!, new Map())!])));
-    if (v) return v;
-  }
-  return 10;
+  // F-026: synthetic labels must be valid, not rely on silent index clamping.
+  // This is a conservative fixture domain, NOT an inferred target relationship.
+  const env = new Map<string, number>();
+  for (const d of mod.dims) { const v = d.value && evalDim(d.value, env); if (v !== null && v !== undefined) env.set(d.name, v); }
+  const bounds: number[] = [];
+  const add = (d: DimExpr | undefined) => { const v = d && evalDim(d, env); bounds.push(v && v > 0 ? v : 1); };
+  for (const p of mod.params) if (p.kind === "embedding") add(p.shape[0]);
+  const walk = (nodes: IRNode[]) => { for (const n of nodes) {
+    if (n.op === "one_hot") add(n.attrs.classes as DimExpr);
+    if (n.op === "cross_entropy") {
+      const ty = mod.values.get(n.inputs[0])?.type;
+      if (ty && isTensor(ty)) add(ty.shape[ty.shape.length - 1]);
+    }
+    for (const r of n.regions ?? []) walk(r.nodes);
+  } };
+  for (const g of [...mod.graphs, ...mod.objectives.map(o => o.graph)]) walk(g.nodes);
+  return bounds.length ? Math.min(...bounds) : 1;
 }
 
 /** `Net.encoder` → the parameters whose owner path lies under that region (shared with the emitter) */

@@ -136,18 +136,32 @@ function tryDivideByExpr(a: DimExpr, b: DimExpr): DimExpr | null {
   return normalize(outTerms);
 }
 
-/**
- * True when `e` is provably non-zero for every binding of its atoms, using only
- * the facts that dimension variables are ≥ 1 and floor-division atoms are ≥ 0:
- * every coefficient shares one sign and at least one term is a constant or a
- * monomial over plain variables (so the sum cannot collapse to 0).  This turns
- * `2*K = 4*K` into a refutation instead of a carried assumption (§5.2).
+/** Conservative lower bound for positive dimension variables (F-027).
+ * Floor atoms are NOT automatically nonnegative: floor((1-T)/2) can be negative.
+ * Unknown bounds return -Infinity, never an invented sign proof.
  */
+export function lowerBound(e: DimExpr): number {
+  let sum = 0;
+  for (const t of e.terms) {
+    if (!t.vars.length) { sum += t.coef; continue; }
+    if (t.coef < 0) return -Infinity;
+    let product = t.coef;
+    for (const v of t.vars) {
+      const a = atomDef(v);
+      if (a.kind === "var") continue; // each dimension variable is at least one
+      const num = lowerBound(a.num), den = lowerBound(a.den);
+      if (num < 0 || den <= 0) return -Infinity;
+      const dc = asConst(a.den);
+      product *= dc !== null ? Math.floor(num / dc) : 0;
+    }
+    sum += product;
+  }
+  return sum;
+}
+
+/** True only when zero is excluded by a sound sign bound. */
 export function isNonZero(e: DimExpr): boolean {
-  if (e.terms.length === 0) return false;
-  const sign = Math.sign(e.terms[0].coef);
-  if (!e.terms.every((t) => Math.sign(t.coef) === sign)) return false;
-  return e.terms.some((t) => t.vars.every((v) => atomDef(v).kind === "var"));
+  return lowerBound(e) > 0 || lowerBound(dNeg(e)) > 0;
 }
 
 export function asConst(e: DimExpr): number | null {

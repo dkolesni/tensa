@@ -306,6 +306,23 @@ AXS0901 on argmax, `stop_grad`, and a backend-unsupported op respectively.
 
 ## 5. Milestone 4 — Research pressure (§47)
 
+> **Status (2026-09-18): required attempts complete; boundaries recorded.** `research.ts`
+> adds ten challenges; the existing distillation challenge is extended in place. Nine compiling
+> programs (including distillation), WGAN-GP/MoE expected rejections, MAML skipped under the §13
+> condition. MoCo is explicitly an independent-key/queue subset, not a working EMA encoder;
+> RL is fixed-trajectory learning, diffusion a noise-prediction training kernel. Historical
+> contrastive examples are alignment-only, not full SimCLR. F-023…F-030 and H-010…H-011 fixed;
+> E-011…E-013 and G-cand-004…005 recorded. §43 differentiation/layout/cursor analyses, MoCo BN
+> update to derived sets, seven-case cond disposition, report-m4.md and revalidation record delivered.
+> Gate: **578/578 tests**, typecheck/build, and emitted-code forward/gradient/state/plan validation
+> on **torch 2.11.0+cu128 / RTX 4090** (13 graphs, 7 plans). No grammar changes, no commits.
+>
+> **Execution requirement (user, 2026-09-18): GPU is the default; no silent CPU fallback.**
+> Generated models/plans select CUDA/MPS or fail. Explicit `device cpu` / Python `device="cpu"`
+> is required for CPU. The Node/browser reference interpreter is a labeled CPU validation oracle.
+> Reproduce with `npx tsx hardening/validate-m4.ts` then `<CUDA-python> hardening/validate-m4.py`;
+> `--device cpu` is an explicit harness exception, not the default gate.
+
 Architecture ladder tiers 2–6 as `Challenge` entries with records. Suggested order, cheapest
 first within the constraint that each stresses something new:
 
