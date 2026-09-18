@@ -516,13 +516,16 @@ function emitPlan(mod: IRModule, plan: IRPlan): string[] {
   const optOf = (name: string) => plan.optimizers.find((o) => o.name === name);
 
   L.push("# --- training plan -------------------------------------------------------");
-  L.push(`def train_${py(plan.name)}(loader, val_loader=None, **dims):`);
+  L.push(`def train_${py(plan.name)}(loader, val_loader=None, models=None, **dims):`);
+  L.push(`    """\`models\` lets a host own the model instances (an agent that acts with the same`);
+  L.push(`    network the plan updates); missing aliases are instantiated here."""`);
+  L.push(`    models = dict(models or {})`);
   const seen = new Map<string, string>();
   for (const m of plan.models) {
     const first = seen.get(m.model);
     if (first) L.push(`    ${py(m.alias)} = ${first}  # one model declaration is one parameter set: both aliases share it (AXS0706, F-015)`);
     else {
-      L.push(`    ${py(m.alias)} = ${py(m.model)}(**dims)`);
+      L.push(`    ${py(m.alias)} = models.get("${m.alias}") or ${py(m.model)}(**dims)`);
       seen.set(m.model, py(m.alias));
     }
   }

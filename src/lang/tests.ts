@@ -859,6 +859,40 @@ model M(x: Tensor[B, T, D]) -> Tensor[B, T, D] { return mystery(x) }`);
     return `${code.split("\n").length} lines of PyTorch`;
   });
 
+  t("backend", "the emitted plan accepts host-owned model instances (H-010)", () => {
+    const src = `dim B
+model Policy(obs: Tensor[B, 3]) -> Tensor[B, 2] {
+  return obs |> linear(2)
+}
+objective Fit(mu: Tensor[B, 2], action: Tensor[B, 2]) -> Scalar {
+  return mse(mu, action)
+}
+source Rollouts = tensor_store(path: "rollouts")
+data Experience from Rollouts {
+  example {
+    field obs: Tensor[3] = decode(obs) |> to_float
+    field action: Tensor[2] = decode(action) |> to_float
+  }
+  batch 32
+}
+train Agent {
+  data Experience
+  model net = Policy
+  loss fit = Fit(mu: net(obs), action: action)
+  optimizer opt = adam(lr: 1e-3)
+  phase learn {
+    steps 10
+    update fit with opt
+  }
+}`;
+    const r = compile(src, "h010");
+    assert(r.ok, r.errors.map((d) => d.message).join("; "));
+    const code = emitTorch(r.mod);
+    assert(code.includes("def train_Agent(loader, val_loader=None, models=None, **dims):"), "models parameter");
+    assert(code.includes('net = models.get("net") or Policy(**dims)'), "host instance is used when supplied");
+    return "the acting network and the trained network can be one object";
+  });
+
   t("backend", "symbolic extents lower to Python expressions, not dictionary keys (H-003)", () => {
     const src = `dim B
 dim K
