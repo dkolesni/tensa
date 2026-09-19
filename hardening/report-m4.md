@@ -9,7 +9,7 @@ in challenges/types.ts (consumed by driver.ts), and M0–M3 corpus wiring was ve
 - DenseNet's four symbolic growth concatenations prove C+4G without handwritten input-channel counts.
 - ViT patchify/class-token/position/attention/MLP stays in one language; manual and catalog attention agree numerically.
 - Separate encoder/decoder graphs compose through a masked nested loss binding, with every parameter on the tape.
-- VAE reparameterization and weighted KL/reconstruction need only a sampling catalog addition (H-010).
+- VAE reparameterization and weighted KL/reconstruction need only a sampling catalog addition (H-012).
 - LoRA's frozen base and explicit rank-two adapter use existing structural optimizer regions.
 - Temperature-2 distillation extends the existing challenge with a residual teacher, stop_grad and T² loss scaling.
 
@@ -57,7 +57,7 @@ selects the CPU reference oracle and is labeled accordingly. Mixed precision is 
 
 ## Backend capability gaps
 
-H-010 randn_like and H-011 GPU policy are fixed. Ordinary parameter backpropagation works; derivative-as-value
+H-012 randn_like and H-011 GPU policy are fixed. Ordinary parameter backpropagation works; derivative-as-value
 is not conflated with a missing first-order gradient implementation. RNG checkpoint/replay, executable
 source adapters, autocasting, distributed policy and a versioned restoration driver remain outside this milestone.
 Dynamic custom slices retain unknown shape; a custom operation without a reference implementation remains unvalidated.
@@ -131,4 +131,4 @@ explicit richer-objective/state attempt. Required failures are classified rather
 
 Final local gate: **578/578 tests**, `npm run typecheck`, `npm run build`, plus the default-GPU fidelity
 gate. Revalidation is recorded separately at `records/revalidation-2026-09.md`. Added fixes:
-F-023…F-030, H-010…H-011; design/documentation entries E-011…E-013, G-cand-004…005.
+F-023…F-030, H-012…H-011; design/documentation entries E-011…E-013, G-cand-004…005.

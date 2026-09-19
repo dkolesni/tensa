@@ -1,4 +1,4 @@
-"""GPU fidelity gate. CPU permitted only via --device cpu; never an implicit fallback.
+"""M4 fidelity gate: GPU when available, CPU otherwise (--device forces one). H-011.
 Run validate-m4.ts first. No dependencies beyond PyTorch and the standard library.
 Fixtures align weights, inputs and stochastic draws; RNG algorithms need not match.
 """
@@ -12,12 +12,10 @@ import torch
 
 parser = argparse.ArgumentParser()
 parser.add_argument("directory", nargs="?", default="hardening/.m4-validation")
-parser.add_argument("--device", default=None, help="GPU by default; explicitly pass cpu for CPU validation")
+parser.add_argument("--device", default=None, help="GPU when available, CPU otherwise; pass cpu/cuda to force one")
 args = parser.parse_args()
 directory = Path(args.directory)
-if args.device is None and not torch.cuda.is_available():
-    raise RuntimeError("GPU validation required. Explicitly pass --device cpu to opt into CPU.")
-device = torch.device(args.device or "cuda")
+device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
 torch.set_num_threads(1)
 py = lambda name: re.sub(r"[^A-Za-z0-9_]", "_", name)
 
@@ -36,12 +34,11 @@ for entry in json.loads((directory / "manifest.json").read_text()):
     spec.loader.exec_module(module)
     data = json.loads((directory / (name + ".json")).read_text())
     assert module.execution_device("cpu").type == "cpu"
+    # H-011: GPU when available, CPU otherwise — never an error for a missing accelerator.
     with patch.object(torch.cuda, "is_available", return_value=False), patch.object(torch.backends.mps, "is_available", return_value=False):
-        try:
-            module.execution_device()
-            raise AssertionError("silently fell back to CPU")
-        except RuntimeError as error:
-            assert "GPU" in str(error)
+        assert module.execution_device().type == "cpu"
+    with patch.object(torch.cuda, "is_available", return_value=True):
+        assert module.execution_device().type == "cuda"
     checked = 0
     for g in data["graphs"]:
         model = getattr(module, g["name"])(device=args.device, **data["dims"]).eval()

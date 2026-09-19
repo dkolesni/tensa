@@ -110,12 +110,11 @@ holds the larger view components (`Editor`, `DiagnosticList`, `InspectView`, `Ru
 
 ### Conventions worth knowing
 
-- **GPU execution is required by default (2026-09-18).** Generated PyTorch models/plans select
-  CUDA (or MPS) and fail clearly if no GPU exists; never silently fall back to CPU. CPU requires
-  explicit `device cpu` in a plan or `device="cpu"` at the generated Python entry point.
-  The browser/Node reference interpreter is explicitly a CPU-only validation oracle, not a GPU run.
-  M4 fidelity gate: `npx tsx hardening/validate-m4.ts`, then run `hardening/validate-m4.py` with a
-  CUDA-enabled Python. The harness defaults to GPU; `--device cpu` is an explicit exception.
+- Device placement (H-011): generated PyTorch runs on the GPU when one is available (CUDA, then
+  MPS) and on CPU otherwise; `device cpu` in a plan or `device=` at the generated entry points
+  forces one. The browser/Node reference interpreter is the CPU validation oracle, not a GPU run.
+  M4 fidelity gate: `npx tsx hardening/validate-m4.ts`, then `python hardening/validate-m4.py`
+  (`--device cpu|cuda` to force).
 - M4 corpus: `research.ts` exports `RESEARCH_CHALLENGES`, appended in `corpus.ts`; records and
   `hardening/report-m4.md` distinguish compiling subsets from unsupported complete algorithms.
   `randn_like` is catalog vocabulary: independent standard-normal draws in train AND eval,

@@ -255,7 +255,7 @@ vaeChallenge.expect.effects = ["stochastic"];
 vaeChallenge.expect.emitContains = ["torch.randn_like"];
 vaeChallenge.expect.run!.gradAll = true;
 vaeChallenge.twins = [{ id: "latent-width", mutates: "sample wider than the mean", code: VAE.replace("randn_like(mu)", "randn_like(concat(mu, mu, axis: -1))"), expectCodes: ["AXS0401"] }];
-vaeChallenge.expect.custom = [{ name: "sampling stays stochastic in eval, with no gradient to its template (H-010)", check(mod) {
+vaeChallenge.expect.custom = [{ name: "sampling stays stochastic in eval, with no gradient to its template (H-012)", check(mod) {
   const rt = new Runtime(mod, { dims: { B: 2 }, seed: 11 }); rt.allocate(); rt.training = false;
   const g = mod.graphs.find(g => g.name === "VAE")!;
   const x = X.full([2, 6], 0.2);

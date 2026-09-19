@@ -468,9 +468,9 @@ Derived automatically: gradient zeroing, forward, loss evaluation, backward, opt
 train/eval context switching, device movement, validation, checkpointing and gradient clipping.
 Mixed precision remains an annotation, not implemented autocasting.
 
-**GPU is required by default.** The PyTorch backend selects CUDA (or MPS); no available GPU is an
-error, never an implicit CPU fallback. Explicit \`device cpu\` or Python \`device="cpu"\` opts into CPU.
-The Run tab/\`run\` command explicitly selects the CPU reference interpreter for validation only.
+**Device placement.** The PyTorch backend selects CUDA (or MPS) when available and CPU otherwise;
+\`device cpu\` in a plan or Python \`device=\` forces one. The Run tab/\`run\` command uses the CPU
+reference interpreter for validation only.
 
 ## The temporal vocabulary
 
@@ -979,8 +979,8 @@ export const LIMITATIONS = `## Known limitations
 
 - **No data-dependent control flow in the static core.** There is no \`cond\` IR node yet. Branching
   whose arms share a static contract is a designed extension, not a semantic prohibition.
-- **GPU required for default PyTorch execution.** CUDA/MPS selection fails if neither is available;
-  CPU requires explicit selection. M4 was executed on CUDA, not merely emitted as text.
+- **Device placement is automatic.** CUDA, then MPS, then CPU; \`device cpu\` or \`device=\` forces
+  one. M4 was executed on CUDA and on CPU, not merely emitted as text.
 - **The reference backend is explicitly CPU-only validation.** Convolution is a naive loop; large
   models are slow. Reference results do not satisfy the GPU execution gate.
 - **Data execution is simulated.** Source adapters are declared and checked but not executed: the
@@ -1071,9 +1071,9 @@ No grammar changes were made. Full findings: hardening/report-m4.md and records/
 **Executed GPU evidence:** torch 2.11.0+cu128 on RTX 4090: nine compiling challenges, thirteen model
 graphs and seven plans. Aligned parameters/inputs/noise verify forward values and parameter gradients;
 train/eval state, checkpoint restoration and GPU batch transfer are checked. CPU reference execution
-is a separate, explicitly CPU-only oracle. GPU is required by default; CPU is an explicit opt-in.
+is a separate, explicitly CPU-only oracle; generated code picks the GPU when one exists.
 
-**New fixes:** randn_like catalog/runtime/lowering (H-010), GPU placement and no-fallback policy
+**New fixes:** randn_like catalog/runtime/lowering (H-012), device placement
 (H-011), tuple-forward coherence (F-023), boolean mask fixtures (F-024), empty attention rows (F-025),
 invalid labels (F-026), signed floor proofs (F-027), numerical equivalence guards (F-028), BatchNorm
 running variance (F-029), and unknown-rank slice propagation (F-030). Research gaps were not hidden by custom-op identity substitutes.

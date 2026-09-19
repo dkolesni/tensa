@@ -16,8 +16,8 @@ proof of compiler correctness or a production training benchmark.
 | P1 | F-024/F-025 | encoder-decoder Mask[B,1,S] | Fixed boolean synthetic masks and fully blocked catalog-attention output/gradient. |
 | P1 | F-026 | RL actions outside three classes | Fixed silent one_hot/CE clamping; valid conservative fixture domain. CUDA exposed what CPU had concealed. |
 | P1 | F-029 | MoCo query/key running_var | Fixed reference unbiased running estimate; population variance still normalizes training outputs. |
-| P1 | H-010 | VAE/diffusion sampling | Added randn_like vocabulary/effect/runtime/lowering/coverage. Train/eval samples; no template gradient. |
-| P1 | H-011 | all M4 emitted plans | GPU default required; CPU explicit only. Device placement and no-fallback gate implemented. |
+| P1 | H-012 | VAE/diffusion sampling | Added randn_like vocabulary/effect/runtime/lowering/coverage. Train/eval samples; no template gradient. |
+| P1 | H-011 | all M4 emitted plans | Device placement implemented: GPU when available, CPU otherwise; explicit device honoured. |
 | P1 | G-cand-003 | MoCo BN encoder + queue | Proposal updated: source/key statistics, mode and refresh order unresolved; no derived-set syntax. |
 | P1 | G-cand-002 | WGAN-GP + input/parameter gradient witnesses | §43 analysis separates retention/targets/ownership. MAML skipped, not approximated. |
 | P2 | E-007 / G-cand-004 | MHA merge + ViT patchify | Proposal analysis only; numeric layout mutants remain indispensable. |
@@ -80,7 +80,7 @@ All corrected (E-011/E-012), without pretending full SimCLR was validated.
 ### Actual GPU execution
 Default Python had no torch, but an existing CUDA-enabled interpreter was available. No dependency
 install or hardware reconfiguration was needed. Reproduce via hardening/validate-m4.{ts,py}; GPU is
-required by default. CPU comparison is explicitly the reference oracle, not a fallback execution mode.
+selected when available, CPU otherwise. The CPU reference interpreter is the oracle the GPU run is compared against.
 
 Torch 2.11.0+cu128, RTX 4090, CUDA: all nine compiling M4 challenges, thirteen graphs, seven emitted
 training plans pass. Weights and inputs align with the CPU oracle; stochastic draws are injected for

@@ -383,7 +383,7 @@ export const CATALOG: OpSpec[] = [
     ports: ["x"],
     config: [],
     effects: ["stochastic"],
-    doc: "Independent standard normal noise with the input shape, in train AND eval. No gradient to the shape template (H-010).",
+    doc: "Independent standard normal noise with the input shape, in train AND eval. No gradient to the shape template (H-012).",
     infer: (c) => ({ out: tensor(c.ins[0]?.shape ?? []) }),
   },
   {

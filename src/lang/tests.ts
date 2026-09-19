@@ -859,6 +859,46 @@ model M(x: Tensor[B, T, D]) -> Tensor[B, T, D] { return mystery(x) }`);
     return `${code.split("\n").length} lines of PyTorch`;
   });
 
+  t("backend", "the emitted plan accepts host-owned model instances (H-010)", () => {
+    const src = `dim B
+model Policy(obs: Tensor[B, 3]) -> Tensor[B, 2] {
+  return obs |> linear(2)
+}
+objective Fit(mu: Tensor[B, 2], action: Tensor[B, 2]) -> Scalar {
+  return mse(mu, action)
+}
+source Rollouts = tensor_store(path: "rollouts")
+data Experience from Rollouts {
+  example {
+    field obs: Tensor[3] = decode(obs) |> to_float
+    field action: Tensor[2] = decode(action) |> to_float
+  }
+  batch 32
+}
+train Agent {
+  data Experience
+  model net = Policy
+  loss fit = Fit(mu: net(obs), action: action)
+  optimizer opt = adam(lr: 1e-3)
+  phase learn {
+    steps 10
+    update fit with opt
+  }
+}`;
+    const r = compile(src, "h010");
+    assert(r.ok, r.errors.map((d) => d.message).join("; "));
+    const code = emitTorch(r.mod);
+    assert(
+      code.includes("def train_Agent(loader, val_loader=None, *, models=None, device=None, **dims):"),
+      "models parameter"
+    );
+    assert(
+      code.includes('net = (models.get("net") or Policy(device=device, **dims)).to(device)'),
+      "host instance is used when supplied and moved to the plan's device"
+    );
+    return "the acting network and the trained network can be one object";
+  });
+
   t("backend", "symbolic extents lower to Python expressions, not dictionary keys (H-003)", () => {
     const src = `dim B
 dim K
@@ -1017,14 +1057,14 @@ model M(x: Tensor[B, 2, 4, 4]) -> Tensor[B, 4, 4, 4] {
 
   for (const p of PROPERTIES) t("property", p.name, () => checkProperty(p));
 
-  t("backend", "GPU is required by default, CPU is explicit and graph allocations follow the device (H-011)", () => {
+  t("backend", "GPU when available, CPU otherwise; graph allocations follow the device (H-011)", () => {
     const code = emitTorch(compile(CHALLENGES.find(c => c.id === "encoder-decoder")!.code).mod);
-    for (const token of ['def execution_device(requested=None)', 'TENSA requires a GPU', 'device=device, **dims', 'batch = move_batch(batch, device)', 'device = self._device_anchor.device'])
+    for (const token of ['def execution_device(requested=None)', 'return torch.device("cpu")', 'device=device, **dims', 'batch = move_batch(batch, device)', 'device = self._device_anchor.device'])
       assert(code.includes(token), `missing ${token}`);
-    assert(!code.includes('else "cpu"'), "silent CPU fallback");
+    assert(!code.includes("TENSA requires a GPU"), "a missing GPU must not refuse to run");
     const cpu = emitTorch(compile(CHALLENGES.find(c => c.id === "lora")!.code.replace('phase tune', 'device cpu\n  phase tune')).mod);
     assert(cpu.includes('else "cpu")'), "explicit source CPU policy ignored");
-    return "device allocation and transfer pinned; executable GPU gate in hardening/validate-m4.py";
+    return "device allocation and transfer pinned; fidelity gate in hardening/validate-m4.py";
   });
 
   t("backend", "tuple loss projections share one stochastic forward, fresh each loss (F-023)", () => {
@@ -1097,6 +1137,17 @@ train Fit {
       assert(refused, `accepted ${bad}`);
     }
     return "negative, out-of-range, fractional and non-finite labels refused";
+  });
+
+  t("backend", "out-of-vocabulary token ids are refused instead of silently clamped (F-026 parity)", () => {
+    const table = X.full([3, 2], 1);
+    for (const bad of [-1, 3, 10, 0.5, NaN]) {
+      let refused = false;
+      try { X.embedding(table, X.fromArray([1], [bad])); } catch { refused = true; }
+      assert(refused, `accepted ${bad}`);
+    }
+    assert(X.embedding(table, X.fromArray([2], [0, 2])).size === 4, "in-range ids look up");
+    return "ids outside [0, vocab) refused; PyTorch's nn.Embedding raises on the same inputs";
   });
 
   t("metamorphic", "ViT patch permutation is a second shape-blind layout witness (E-007, G-cand-004)", () => {

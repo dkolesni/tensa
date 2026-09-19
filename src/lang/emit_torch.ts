@@ -61,11 +61,11 @@ export function emitTorch(mod: IRModule): string {
   L.push("import torch.nn.functional as F");
   L.push("");
   L.push("def execution_device(requested=None):");
-  L.push('    """GPU required by default; CPU is an explicit opt-in (H-011)."""');
+  L.push('    """GPU when available, CPU otherwise; an explicit device is honoured as given (H-011)."""');
   L.push('    if requested is None or str(requested) in ("auto", "gpu"):');
   L.push('        if torch.cuda.is_available(): return torch.device("cuda")');
   L.push('        if torch.backends.mps.is_available(): return torch.device("mps")');
-  L.push('        raise RuntimeError("TENSA requires a GPU; explicitly select device=cpu to run on CPU")');
+  L.push('        return torch.device("cpu")');
   L.push("    return torch.device(requested)");
   L.push("");
   L.push("def projected(cache, key, forward, index):");
@@ -174,14 +174,17 @@ function emitModule(mod: IRModule, g: IRGraph, env: Map<string, number>): string
   L.push("        self.p = nn.ParameterDict()");
   for (const p of params) {
     const shape = p.shape.map((d) => evalDim(d, env) ?? pyDim(d, (n) => `dims["${n}"]`)).join(", ");
+    // fan-based inits need rank >= 2; scalars/vectors fall back to a small normal so the
+    // generated line is valid Python for every shape (`torch.empty()` is not).
+    const fanInit = p.shape.length >= 2;
     const init =
       p.init === "zeros"
         ? `torch.zeros(${shape || "()"}, device=device)`
         : p.init === "ones"
         ? `torch.ones(${shape || "()"}, device=device)`
-        : p.init === "kaiming"
+        : p.init === "kaiming" && fanInit
         ? `nn.init.kaiming_normal_(torch.empty(${shape}, device=device))`
-        : p.init === "normal"
+        : p.init === "normal" || !fanInit
         ? `torch.randn(${shape || "()"}, device=device) * 0.02`
         : `nn.init.xavier_uniform_(torch.empty(${shape}, device=device))`;
     L.push(
@@ -550,14 +553,17 @@ function emitPlan(mod: IRModule, plan: IRPlan): string[] {
   const optOf = (name: string) => plan.optimizers.find((o) => o.name === name);
 
   L.push("# --- training plan -------------------------------------------------------");
-  L.push(`def train_${py(plan.name)}(loader, val_loader=None, *, device=None, **dims):`);
+  L.push(`def train_${py(plan.name)}(loader, val_loader=None, *, models=None, device=None, **dims):`);
+  L.push(`    """\`models\` lets a host own the model instances (an agent that acts with the same`);
+  L.push(`    network the plan updates); missing aliases are instantiated here."""`);
   L.push(`    device = execution_device(device if device is not None else ${JSON.stringify(plan.settings.device ?? "auto")})`);
+  L.push(`    models = dict(models or {})`);
   const seen = new Map<string, string>();
   for (const m of plan.models) {
     const first = seen.get(m.model);
     if (first) L.push(`    ${py(m.alias)} = ${first}  # one model declaration is one parameter set: both aliases share it (AXS0706, F-015)`);
     else {
-      L.push(`    ${py(m.alias)} = ${py(m.model)}(device=device, **dims)`);
+      L.push(`    ${py(m.alias)} = (models.get("${m.alias}") or ${py(m.model)}(device=device, **dims)).to(device)`);
       seen.set(m.model, py(m.alias));
     }
   }

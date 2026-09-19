@@ -12,7 +12,7 @@ Runtime result: training reaches all parameters; F-023 fixes the formerly differ
 Reference result: GPU aligned-noise forward/gradients, independent eval draws and training plan pass. Host timestep sampling remains explicit in the reference boundary.
 Gradient result: target has no gradient; reparameterized model path works normally.
 Diagnostics: AXS0401 twin; no warnings.
-Finding classification: H-010 reused, F-023 fixed; B for schedule selection. EMA remains the existing G-cand-003 witness, not a duplicate challenge.
+Finding classification: H-012 reused, F-023 fixed; B for schedule selection. EMA remains the existing G-cand-003 witness, not a duplicate challenge.
 Severity: major before tuple fix.
 Workaround: no sampling escape needed; real data/timestep scheduling host-side.
 Proposed action: reverse-time scan and schedule-data integration in a later round.

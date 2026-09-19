@@ -1,6 +1,6 @@
 """Paper-level M4 tensor references, separate from generated code.
 Inputs/parameters own their device; new allocations follow inputs. Executable fidelity gate:
-validate-m4.ts + validate-m4.py (GPU required by default, explicit --device cpu only).
+validate-m4.ts + validate-m4.py (GPU when available, CPU otherwise; --device forces one).
 These formulas document the mathematical target; the gate compares full emitted graphs against
 an independent TypeScript interpreter with aligned weights/inputs/noise, not training accuracy.
 """

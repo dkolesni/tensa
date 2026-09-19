@@ -87,7 +87,7 @@ export function randn(): number {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
-/** H-010: sampling is independent of the template values and of train/eval mode. */
+/** H-012: sampling is independent of the template values and of train/eval mode. */
 export function randnLike(x: T): T {
   const out = new T([...x.shape]);
   for (let i = 0; i < out.size; i++) out.data[i] = randn();
@@ -507,11 +507,11 @@ export function matmul(a: T, b: T): T {
 // ------------------------------------------------------------------ nn ops
 
 export function embedding(table: T, ids: T): T {
-  const [_v, D] = table.shape;
-  void _v;
+  const [V, D] = table.shape;
   const out = new T([...ids.shape, D]);
+  // F-026 parity: an out-of-vocabulary id is an error, never a silently clamped row.
   for (let i = 0; i < ids.size; i++) {
-    const t = Math.max(0, Math.min(table.shape[0] - 1, Math.round(ids.data[i])));
+    const t = tokenIndex(ids.data[i], V);
     for (let d = 0; d < D; d++) out.data[i * D + d] = table.data[t * D + d];
   }
   return record(
@@ -519,7 +519,7 @@ export function embedding(table: T, ids: T): T {
     () => {
       const gt = table.ensureGrad();
       for (let i = 0; i < ids.size; i++) {
-        const t = Math.max(0, Math.min(table.shape[0] - 1, Math.round(ids.data[i])));
+        const t = tokenIndex(ids.data[i], V);
         for (let d = 0; d < D; d++) gt[t * D + d] += out.g![i * D + d];
       }
     },
@@ -709,6 +709,13 @@ export function maskedFill(x: T, mask: T, value: number): T {
 export function classIndex(value: number, classes: number): number {
   if (!Number.isInteger(value) || value < 0 || value >= classes)
     throw new Error(`class index ${value} is outside [0, ${classes})`);
+  return value;
+}
+
+/** Same rule for embedding lookups: a token id must name a real row of the table. */
+export function tokenIndex(value: number, vocab: number): number {
+  if (!Number.isInteger(value) || value < 0 || value >= vocab)
+    throw new Error(`token id ${value} is outside the vocabulary [0, ${vocab})`);
   return value;
 }
 
