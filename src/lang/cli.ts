@@ -19,7 +19,7 @@ export const HELP = `axis <command> [file.axis]
              sharing, state, effects, lifecycle, checkpoint coverage)
   ir         print the backend-neutral intermediate representation
   emit       print generated PyTorch for the selected backend
-  run        execute with the reference backend (forward + training plan)
+  run        explicitly use the CPU reference interpreter (validation only)
   test       run the semantic / regression suite
   examples   list the bundled examples
   catalog    list the standard catalog with shape rules and effects
@@ -71,7 +71,7 @@ export function executeCommand(cmd: string, src: string): string {
       if (!r.ok)
         return `refusing to run: ${r.errors.length} error(s)\n\n${r.errors.map((d) => formatDiagnostic(d, src)).join("\n\n")}`;
       const rep = runProgram(r.mod, { maxSteps: Number(rest[0] ?? 6) });
-      const L: string[] = [];
+      const L: string[] = ["CPU reference validation (explicit reference backend); GPU execution uses emitted PyTorch."];
       L.push(`dimension bindings: ${rep.dims.map((d) => `${d.name}=${d.value}`).join(", ")}`);
       L.push(`parameters: ${rep.paramCount.toLocaleString()} values`);
       L.push("");

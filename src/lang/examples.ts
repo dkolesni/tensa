@@ -612,7 +612,7 @@ train VisionRun {
     id: "contrastive-data",
     title: "Two-view contrastive construction",
     group: "Data",
-    summary: "Example construction can emit several views of one source record.",
+    summary: "Two views with cosine alignment only — not full SimCLR/NT-Xent (no negative pairs).",
     code: `dim B
 dim E = 64
 
@@ -640,7 +640,7 @@ model TwoView(a: Image[B, 3, 32, 32], b: Image[B, 3, 32, 32]) -> (Tensor[B, E], 
   return (encoder(a), encoder(b))
 }
 
-objective NTXent(ea: Tensor[B, E], eb: Tensor[B, E]) -> Scalar {
+objective Alignment(ea: Tensor[B, E], eb: Tensor[B, E]) -> Scalar {
   let sim = cosine_similarity(ea, eb, axis: -1)
   return mean(1.0 - sim)
 }
@@ -648,7 +648,7 @@ objective NTXent(ea: Tensor[B, E], eb: Tensor[B, E]) -> Scalar {
 train Pretext {
   data Views
   model Enc = TwoView
-  loss con = NTXent(ea: Enc(view1, view2)[0], eb: Enc(view1, view2)[1])
+  loss con = Alignment(ea: Enc(view1, view2)[0], eb: Enc(view1, view2)[1])
   optimizer opt = adamw(lr: 1e-3)
   epochs 2
 }`,
@@ -791,7 +791,7 @@ train Adversarial {
 }`,
     friction: [
       { kind: "B", note: "The 2:1 update ratio is the algorithm." },
-      { kind: "D", note: "The reference backend approximates nested model composition with synthetic inputs." },
+      { kind: "B", note: "Nested model calls execute on one tape; real data adapters remain host-side (H-007 fixed)." },
     ],
   },
   {

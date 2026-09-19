@@ -10,6 +10,14 @@ it. There is no server and no external compiler binary — everything (lexer, pa
 checker, IR, reference backend, PyTorch code generator, test suite) runs client-side in TypeScript,
 bundled into a single static HTML file by Vite.
 
+## Device placement
+
+Generated PyTorch runs on the GPU when one is available (CUDA, then MPS) and on CPU otherwise;
+`device cpu` in the plan, `device=` in generated Python, or `--device` in the fidelity harness
+forces one. The browser/Node reference interpreter is the CPU validation oracle, not evidence of
+GPU execution. Run the fidelity gate with `npx tsx hardening/validate-m4.ts` followed by
+`python hardening/validate-m4.py`. See `CLAUDE.md` and `hardening/report-m4.md`.
+
 ## Commands
 
 ```

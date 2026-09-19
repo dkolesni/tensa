@@ -4,3 +4,5 @@ dist/
 .DS_Store
 *.pt
 *.local
+hardening/.m4-validation/
+__pycache__/

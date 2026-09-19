@@ -51,6 +51,7 @@ export const OP_SHAPE_CASES: OpShapeCase[] = [
   { op: "layernorm", x: "Tensor[B, T, D]", call: "layernorm", out: "Tensor[B, T, D]" },
   { op: "rmsnorm", x: "Tensor[B, T, D]", call: "rmsnorm", out: "Tensor[B, T, D]" },
   { op: "batchnorm", x: "Tensor[B, C, H, W]", call: "batchnorm", out: "Tensor[B, C, H, W]" },
+  { op: "randn_like", x: "Tensor[B, T, D]", call: "randn_like", out: "Tensor[B, T, D]" },
   { op: "dropout", x: "Tensor[B, T, D]", call: "dropout(0.1)", out: "Tensor[B, T, D]" },
   { op: "maxpool2d", x: "Tensor[B, C, H, W]", call: "maxpool2d(2)", out: "Tensor[B, C, ⌊H/2⌋, ⌊W/2⌋]", declared: "Tensor[B, C, H / 2, W / 2]" },
   { op: "avgpool2d", x: "Tensor[B, C, H, W]", call: "avgpool2d(2)", out: "Tensor[B, C, ⌊H/2⌋, ⌊W/2⌋]", declared: "Tensor[B, C, H / 2, W / 2]" },

@@ -1004,7 +1004,8 @@ dim D = 8
 dim K = 4
 model Teacher(x: Tensor[B, D]) -> Logits[B, K] {
   linear(32)
-  gelu
+  residual { layernorm ; linear(64) ; gelu ; linear(32) }
+  layernorm
   linear(K)
 }
 model Student(x: Tensor[B, D]) -> Logits[B, K] {
@@ -1013,8 +1014,8 @@ model Student(x: Tensor[B, D]) -> Logits[B, K] {
   linear(K)
 }
 objective Distill(s: Logits[B, K], t: Logits[B, K], labels: Class[B]) -> Scalar {
-  let soft = softmax(stop_grad(t), axis: -1)
-  let kd = mean(0.0 - sum(soft * log_softmax(s, axis: -1), axis: -1))
+  let soft = softmax(stop_grad(t) / 2.0, axis: -1)
+  let kd = 4.0 * mean(0.0 - sum(soft * log_softmax(s / 2.0, axis: -1), axis: -1))
   return 0.5 * kd + 0.5 * cross_entropy(s, labels)
 }
 source S = synthetic(features: 8)
@@ -1037,12 +1038,18 @@ train KD {
 const distillation: Challenge = {
   id: "distillation",
   title: "Knowledge distillation: a frozen teacher feeds soft targets through stop_grad",
-  section: "§26 item 5",
-  tier: 3,
+  section: "§26 item 5 / §47",
+  tier: 4,
   code: DISTILL,
-  record: "escalation-ladder.md",
+  record: "distillation.md",
   expect: {
     warnCodes: [],
+    paramTables: 16,
+    irOps: ["residual", "stop_grad", "softmax", "log_softmax", "cross_entropy"],
+    inspectContains: ["Teacher", "Student"],
+    emitContains: [".detach()", "F.log_softmax"],
+    checkpointKinds: ["parameters"],
+    run: { steps: 2 },
     effects: ["grad-stopped"],
     custom: [
       runCheck("the teacher receives no update and the student receives all of them", 3, (rep) => {

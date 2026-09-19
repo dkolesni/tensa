@@ -1,0 +1,264 @@
+{
+  "torch": "2.11.0+cu128",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "gpu_device": "cuda:1",
+  "cpu": "Intel64 Family 6 Model 151 Stepping 2, GenuineIntel",
+  "logical_cpus": 24,
+  "cpu_threads": 16,
+  "dtype": "float32",
+  "tf32": false,
+  "compile": false,
+  "groups": 5,
+  "timing": "synchronized wall clock; 5 warmups + pilot, median of groups; training 20 steps/group on both devices; resident inputs; no imports/allocation/data I/O",
+  "results": [
+    {
+      "id": "tiny-m4-vit",
+      "batch": 2,
+      "height": 4,
+      "width": 6,
+      "tokens": 7,
+      "channels": 8,
+      "depth": 1,
+      "parameters": 736,
+      "forward_parity": "pass",
+      "cpu_inference": {
+        "median_ms": 0.28463800030294806,
+        "min_ms": 0.24539300007745624,
+        "max_ms": 0.31093499972485006,
+        "iterations_per_group": 100,
+        "group_ms_per_step": [
+          0.2654849999817088,
+          0.30405899975448847,
+          0.28463800030294806,
+          0.24539300007745624,
+          0.31093499972485006
+        ]
+      },
+      "cpu_training": {
+        "median_ms": 3.317555002286099,
+        "min_ms": 2.7958600025158376,
+        "max_ms": 3.459335002116859,
+        "iterations_per_group": 20,
+        "group_ms_per_step": [
+          3.459335002116859,
+          3.317555002286099,
+          2.7958600025158376,
+          3.1382899993332103,
+          3.410769999027252
+        ]
+      },
+      "cpu_last_loss": 0.8620822429656982,
+      "gpu_inference": {
+        "median_ms": 0.8445729996310547,
+        "min_ms": 0.6059700000332668,
+        "max_ms": 1.1016769998241216,
+        "iterations_per_group": 100,
+        "group_ms_per_step": [
+          1.1016769998241216,
+          0.9425880003254861,
+          0.8445729996310547,
+          0.6261770002311096,
+          0.6059700000332668
+        ]
+      },
+      "gpu_training": {
+        "median_ms": 3.2049200002802536,
+        "min_ms": 3.0519749998347834,
+        "max_ms": 4.0301050001289696,
+        "iterations_per_group": 20,
+        "group_ms_per_step": [
+          3.561060002539307,
+          4.0301050001289696,
+          3.0686499987496063,
+          3.2049200002802536,
+          3.0519749998347834
+        ]
+      },
+      "gpu_last_loss": 0.8620823621749878,
+      "gpu_peak_allocated_MiB": 16.35205078125,
+      "gpu_upload": {
+        "median_ms": 0.033939999993890524,
+        "min_ms": 0.025931000127457082,
+        "max_ms": 0.054496999946422875,
+        "iterations_per_group": 100,
+        "group_ms_per_step": [
+          0.025931000127457082,
+          0.054496999946422875,
+          0.027509999927133322,
+          0.04585099988617003,
+          0.033939999993890524
+        ]
+      },
+      "inference_speedup": 0.33702000943351257,
+      "gpu_inference_images_per_second": 2368.060547606524,
+      "training_speedup": 1.0351444036032087,
+      "gpu_training_images_per_second": 624.0405376187582
+    },
+    {
+      "id": "medium-vit",
+      "batch": 8,
+      "height": 128,
+      "width": 128,
+      "tokens": 65,
+      "channels": 128,
+      "depth": 2,
+      "parameters": 506784,
+      "forward_parity": "pass",
+      "gpu_inference": {
+        "median_ms": 1.180365000036545,
+        "min_ms": 1.09157899976708,
+        "max_ms": 1.5042150003137067,
+        "iterations_per_group": 100,
+        "group_ms_per_step": [
+          1.5042150003137067,
+          1.09157899976708,
+          1.1033060000045225,
+          1.180365000036545,
+          1.2719580001430586
+        ]
+      },
+      "gpu_training": {
+        "median_ms": 7.0588800008408725,
+        "min_ms": 6.0759799991501495,
+        "max_ms": 7.599889999255538,
+        "iterations_per_group": 20,
+        "group_ms_per_step": [
+          7.599889999255538,
+          6.457205000333488,
+          7.0588800008408725,
+          7.233394999639131,
+          6.0759799991501495
+        ]
+      },
+      "gpu_last_loss": 8.841783710522577e-06,
+      "gpu_peak_allocated_MiB": 36.017578125,
+      "cpu_inference": {
+        "median_ms": 2.865050000254996,
+        "min_ms": 2.697082999511622,
+        "max_ms": 3.1382769998162985,
+        "iterations_per_group": 100,
+        "group_ms_per_step": [
+          2.697082999511622,
+          2.865050000254996,
+          3.1382769998162985,
+          3.085826999740675,
+          2.783264999743551
+        ]
+      },
+      "cpu_training": {
+        "median_ms": 15.283769997768104,
+        "min_ms": 14.71925500081852,
+        "max_ms": 17.91403499955777,
+        "iterations_per_group": 20,
+        "group_ms_per_step": [
+          14.71925500081852,
+          14.766914999927394,
+          17.91403499955777,
+          15.388364999671467,
+          15.283769997768104
+        ]
+      },
+      "cpu_last_loss": 8.841907401802018e-06,
+      "gpu_upload": {
+        "median_ms": 0.2996219997294247,
+        "min_ms": 0.24730400007683784,
+        "max_ms": 0.5141020001610741,
+        "iterations_per_group": 100,
+        "group_ms_per_step": [
+          0.5141020001610741,
+          0.3210380004020408,
+          0.24730400007683784,
+          0.28435899992473423,
+          0.2996219997294247
+        ]
+      },
+      "inference_speedup": 2.4272576704377813,
+      "gpu_inference_images_per_second": 6777.564566682605,
+      "training_speedup": 2.1651834279584667,
+      "gpu_training_images_per_second": 1133.324266604195
+    },
+    {
+      "id": "larger-vit",
+      "batch": 8,
+      "height": 224,
+      "width": 224,
+      "tokens": 197,
+      "channels": 256,
+      "depth": 4,
+      "parameters": 3411232,
+      "forward_parity": "pass",
+      "cpu_inference": {
+        "median_ms": 30.934783329333488,
+        "min_ms": 27.683416672516614,
+        "max_ms": 54.01931667195944,
+        "iterations_per_group": 6,
+        "group_ms_per_step": [
+          34.165483336740486,
+          54.01931667195944,
+          27.683416672516614,
+          28.8824833308657,
+          30.934783329333488
+        ]
+      },
+      "cpu_training": {
+        "median_ms": 106.89506999915466,
+        "min_ms": 105.02803999988828,
+        "max_ms": 132.07977999991272,
+        "iterations_per_group": 20,
+        "group_ms_per_step": [
+          106.38191500038374,
+          106.89506999915466,
+          120.11699999857228,
+          132.07977999991272,
+          105.02803999988828
+        ]
+      },
+      "cpu_last_loss": 3.1707713787909597e-06,
+      "gpu_inference": {
+        "median_ms": 2.5203157902548186,
+        "min_ms": 2.311136842125275,
+        "max_ms": 3.3148000008639014,
+        "iterations_per_group": 57,
+        "group_ms_per_step": [
+          3.3148000008639014,
+          2.311136842125275,
+          2.5203157902548186,
+          2.6977385972267047,
+          2.3838052630277446
+        ]
+      },
+      "gpu_training": {
+        "median_ms": 10.077330001513474,
+        "min_ms": 8.953605001443066,
+        "max_ms": 11.243424998247065,
+        "iterations_per_group": 20,
+        "group_ms_per_step": [
+          11.243424998247065,
+          9.837540000444278,
+          8.953605001443066,
+          11.186164998798631,
+          10.077330001513474
+        ]
+      },
+      "gpu_last_loss": 3.1709139420854626e-06,
+      "gpu_peak_allocated_MiB": 182.41650390625,
+      "gpu_upload": {
+        "median_ms": 0.545644000521861,
+        "min_ms": 0.4942299996037036,
+        "max_ms": 0.5992220004554838,
+        "iterations_per_group": 100,
+        "group_ms_per_step": [
+          0.5361579998861998,
+          0.5992220004554838,
+          0.56655700027477,
+          0.4942299996037036,
+          0.545644000521861
+        ]
+      },
+      "inference_speedup": 12.274169550080787,
+      "gpu_inference_images_per_second": 3174.205403518562,
+      "training_speedup": 10.607479360415955,
+      "gpu_training_images_per_second": 793.8610722084632
+    }
+  ]
+}

@@ -377,6 +377,16 @@ export const CATALOG: OpSpec[] = [
     },
   },
   {
+    name: "randn_like",
+    style: "primitive",
+    category: "tensor",
+    ports: ["x"],
+    config: [],
+    effects: ["stochastic"],
+    doc: "Independent standard normal noise with the input shape, in train AND eval. No gradient to the shape template (H-012).",
+    infer: (c) => ({ out: tensor(c.ins[0]?.shape ?? []) }),
+  },
+  {
     name: "dropout",
     style: "layer",
     category: "regularisation",

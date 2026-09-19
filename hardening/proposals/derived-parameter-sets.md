@@ -59,8 +59,10 @@ Proposed semantics (concept, not syntax):
       2. it is never claimed by an optimizer (AXS0703-style error if it is);
       3. it is refreshed by a plan rule (`ema(rate)`, `copy every N steps`) that is
          plan data — visible in inspect and simulated by the runtime;
-      4. a model evaluated with it carries effect `grad-stopped` toward the source
-         (no gradient reaches the source through the derived set);
+      4. EMA/copy teachers carry `grad-stopped` toward the source. This MUST NOT be
+         imposed on differentiably derived MAML parameters: full MAML retains the
+         theta' → theta path. Derivation kind and differentiation policy are separate
+         unresolved requirements (M4 revalidation; see differentiation.md);
       5. it is in the checkpoint under its own kind ("derived parameters").
 
 Static knowledge gained:
@@ -101,6 +103,27 @@ Alternative rejected:
     · "do it in the emitter only" (`functional_call` with the tracked dict) — the IR
       would not know, so inspect/runtime/checkpoint would disagree with the Python.
 ```
+
+## M4 witness: MoCo hits the BN-statistics bar (2026-09-18)
+
+`research.ts/moco` has two BN encoders, a persistent FIFO bank and a query-parameter EMA
+track. Inspect shows distinct query/key running mean/variance buffers; the track holds only
+parameter shadows. There is still no connection from the shadow to Key's forward.
+
+Thus bar 6 is **hit, not resolved**: substituting only weights says nothing about whether Key
+uses independent running statistics, copied source buffers, averaged buffers, batch statistics
+(as in training/shuffled-BN variants), or evaluation-only statistics. stop_grad prevents gradient
+flow, NOT BN updates; freeze controls parameters, NOT model mode. Parameter regions compose
+with those controls, but none specifies the key encoder's per-call state/mode policy.
+
+The executable subset verifies FIFO updates/read-only eval and separate buffer ownership.
+CUDA/reference buffer comparison also found and fixed F-029 (unbiased running variance), an
+implementation error independent of the missing derived-set semantics. No extra EMA challenge
+was added for diffusion; the existing teacher witness remains authoritative.
+
+Decisions still required: refresh order relative to optimizer and queue update; buffer ownership
+and checkpoint categories; per-call mode/effect policy; detached EMA versus differentiable inner
+updates. Do not claim MoCo is implemented merely because the independent-key subset runs.
 
 ## What would move this to a proposal with syntax
 

@@ -32,10 +32,10 @@ export function canonicalIR(mod: IRModule, ignore: string[] = []): string {
   });
 }
 
-function forwardOutputs(mod: IRModule, dims?: Record<string, number>): number[][] {
+function forwardOutputs(mod: IRModule, dims?: Record<string, number>): { shape: number[]; data: number[] }[] {
   const rt = new Runtime(mod, { dims, seed: 11 });
   rt.allocate();
-  const out: number[][] = [];
+  const out: { shape: number[]; data: number[] }[] = [];
   for (const g of mod.graphs.filter((g) => g.kind === "model")) {
     X.beginTape();
     rt.env = new Map();
@@ -44,7 +44,11 @@ function forwardOutputs(mod: IRModule, dims?: Record<string, number>): number[][
       const t = iv.type as TensorType;
       return syntheticField(rt.dims(t.shape), t.kind, guessVocab(mod, t), i + 1);
     });
-    for (const o of rt.evalGraph(g, inputs)) out.push([...o.data]);
+    for (const o of rt.evalGraph(g, inputs)) {
+      if (o.data.some(v => !Number.isFinite(v))) throw new Error(`non-finite output from ${g.name} (F-028)`);
+      out.push({ shape: o.shape, data: [...o.data] });
+    }
+    if (rt.errors.length) throw new Error(rt.errors.join("; "));
   }
   return out;
 }
@@ -81,10 +85,10 @@ export function assertEquivalent(a: string, b: string, opts: EquivalenceOptions 
     const tol = opts.run.tol ?? 1e-5;
     if (oa.length !== ob.length) throw new Error(`output count differs: ${oa.length} vs ${ob.length}`);
     for (let i = 0; i < oa.length; i++) {
-      if (oa[i].length !== ob[i].length) throw new Error(`output ${i} size differs: ${oa[i].length} vs ${ob[i].length}`);
-      for (let k = 0; k < oa[i].length; k++)
-        if (Math.abs(oa[i][k] - ob[i][k]) > tol)
-          throw new Error(`output ${i}[${k}] differs: ${oa[i][k]} vs ${ob[i][k]} (tol ${tol})`);
+      if (oa[i].shape.join() !== ob[i].shape.join()) throw new Error(`output ${i} shape differs: ${oa[i].shape} vs ${ob[i].shape} (F-028)`);
+      for (let k = 0; k < oa[i].data.length; k++)
+        if (Math.abs(oa[i].data[k] - ob[i].data[k]) > tol)
+          throw new Error(`output ${i}[${k}] differs: ${oa[i].data[k]} vs ${ob[i].data[k]} (tol ${tol})`);
     }
   }
   return `${ra.mod.params.length} tables, ${pa.totalParams ?? "?"} values${opts.run ? ", outputs equal" : ""}`;

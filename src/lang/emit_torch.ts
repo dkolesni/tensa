@@ -60,6 +60,26 @@ export function emitTorch(mod: IRModule): string {
   L.push("import torch.nn as nn");
   L.push("import torch.nn.functional as F");
   L.push("");
+  L.push("def execution_device(requested=None):");
+  L.push('    """GPU when available, CPU otherwise; an explicit device is honoured as given (H-011)."""');
+  L.push('    if requested is None or str(requested) in ("auto", "gpu"):');
+  L.push('        if torch.cuda.is_available(): return torch.device("cuda")');
+  L.push('        if torch.backends.mps.is_available(): return torch.device("mps")');
+  L.push('        return torch.device("cpu")');
+  L.push("    return torch.device(requested)");
+  L.push("");
+  L.push("def projected(cache, key, forward, index):");
+  L.push('    """One tuple-valued forward per loss, not one per projection (F-023)."""');
+  L.push("    if key not in cache: cache[key] = forward()");
+  L.push("    return cache[key][index]");
+  L.push("");
+  L.push("def move_batch(batch, device):");
+  L.push("    if isinstance(batch, torch.Tensor): return batch.to(device)");
+  L.push("    if isinstance(batch, dict): return {k: move_batch(v, device) for k, v in batch.items()}");
+  L.push("    if isinstance(batch, tuple): return tuple(move_batch(v, device) for v in batch)");
+  L.push("    if isinstance(batch, list): return [move_batch(v, device) for v in batch]");
+  L.push("    return batch");
+  L.push("");
   L.push("def set_lr(opt, params, lr):");
   L.push('    """Region-level learning rate: move `params` into their own param group (H-006)."""');
   L.push("    ids = {id(p) for p in params}");
@@ -131,6 +151,7 @@ export function emitTorch(mod: IRModule): string {
     L.push("    dims = resolve_dims(dims or {})");
     // ports are IR values like any other: alias them or the body raises NameError (H-006)
     for (const i of o.graph.inputs) L.push(`    v${i.id} = ${py(i.name ?? i.id)}`);
+    L.push(`    device = ${o.graph.inputs.length ? `v${o.graph.inputs[0].id}.device` : "execution_device()"}`);
     const body = emitNodes(mod, o.graph.nodes, "    ", env, "dims");
     L.push(...body);
     L.push(`    return ${o.graph.outputs.map((x) => `v${x}`).join(", ")}`);
@@ -145,22 +166,27 @@ function emitModule(mod: IRModule, g: IRGraph, env: Map<string, number>): string
   const params = mod.params.filter((p) => p.owner.split("/")[0] === g.name);
   const states = mod.states.filter((s) => s.owner.split("/")[0] === g.name);
   L.push(`class ${py(g.name)}(nn.Module):`);
-  L.push("    def __init__(self, **dims):");
+  L.push("    def __init__(self, *, device=None, **dims):");
   L.push("        super().__init__()");
+  L.push("        device = execution_device(device)");
+  L.push('        self.register_buffer("_device_anchor", torch.empty(0, device=device), persistent=False)');
   L.push("        self.dims = dims = resolve_dims(dims)");
   L.push("        self.p = nn.ParameterDict()");
   for (const p of params) {
     const shape = p.shape.map((d) => evalDim(d, env) ?? pyDim(d, (n) => `dims["${n}"]`)).join(", ");
+    // fan-based inits need rank >= 2; scalars/vectors fall back to a small normal so the
+    // generated line is valid Python for every shape (`torch.empty()` is not).
+    const fanInit = p.shape.length >= 2;
     const init =
       p.init === "zeros"
-        ? `torch.zeros(${shape})`
+        ? `torch.zeros(${shape || "()"}, device=device)`
         : p.init === "ones"
-        ? `torch.ones(${shape})`
-        : p.init === "kaiming"
-        ? `nn.init.kaiming_normal_(torch.empty(${shape}))`
-        : p.init === "normal"
-        ? `torch.randn(${shape}) * 0.02`
-        : `nn.init.xavier_uniform_(torch.empty(${shape}))`;
+        ? `torch.ones(${shape || "()"}, device=device)`
+        : p.init === "kaiming" && fanInit
+        ? `nn.init.kaiming_normal_(torch.empty(${shape}, device=device))`
+        : p.init === "normal" || !fanInit
+        ? `torch.randn(${shape || "()"}, device=device) * 0.02`
+        : `nn.init.xavier_uniform_(torch.empty(${shape}, device=device))`;
     L.push(
       `        self.p["${py(p.id)}"] = nn.Parameter(${init}, requires_grad=${p.trainable ? "True" : "False"})` +
         (p.applications.length > 1 ? `  # shared by ${p.applications.length} applications` : "")
@@ -170,7 +196,7 @@ function emitModule(mod: IRModule, g: IRGraph, env: Map<string, number>): string
     L.push(
       `        self.register_buffer("${py(s.id)}", torch.${s.init === "ones" ? "ones" : "zeros"}(${s.shape
         .map((d) => evalDim(d, env) ?? pyDim(d, (n) => `dims["${n}"]`))
-        .join(", ")}))  # persistent state, update=${s.update}`
+        .join(", ") || "()"}, device=device))  # persistent state, update=${s.update}`
     );
   L.push("");
   L.push(`    def forward(self, ${g.inputs.map((i) => py(i.name ?? i.id)).join(", ")}):`);
@@ -190,6 +216,7 @@ function emitModule(mod: IRModule, g: IRGraph, env: Map<string, number>): string
   if (bound.size) {
     L.push(`        dims = resolve_dims({**self.dims, ${[...bound].map(([v, e]) => `"${v}": ${e}`).join(", ")}})`);
   } else L.push("        dims = self.dims");
+  L.push("        device = self._device_anchor.device");
   L.push(...emitNodes(mod, g.nodes, "        ", env, "dims"));
   L.push(`        return ${g.outputs.map((o) => `v${o}`).join(", ")}`);
   return L;
@@ -214,10 +241,10 @@ function emitNode(mod: IRModule, n: IRNode, ind: string, env: Map<string, number
   const dr = (d?: DimExpr) => (d ? (evalDim(d, env) ?? pyDim(d, (v) => `${dimsRef}["${v}"]`)).toString() : "0");
   switch (n.op) {
     case "const":
-      return [`${ind}${o()} = torch.tensor(${num("value")})`];
+      return [`${ind}${o()} = torch.tensor(${num("value")}, device=device)`];
     case "const_dim":
       return [
-        `${ind}${o()} = torch.tensor(float(${pyDim(dimAttr(n.attrs.dim), (v) => `${dimsRef}["${v}"]`)}))  # symbolic dim ${show(
+        `${ind}${o()} = torch.tensor(float(${pyDim(dimAttr(n.attrs.dim), (v) => `${dimsRef}["${v}"]`)}), device=device)  # symbolic dim ${show(
           dimAttr(n.attrs.dim)
         )}`,
       ];
@@ -263,6 +290,8 @@ function emitNode(mod: IRModule, n: IRNode, ind: string, env: Map<string, number
       return [
         `${ind}${o()} = F.batch_norm(${a()}, self.${py(n.states[0])}, self.${py(n.states[1])}, ${P(0)}, ${P(1)}, self.training, ${num("momentum", 0.1)}, 1e-5)${cmt}`,
       ];
+    case "randn_like":
+      return [`${ind}${o()} = torch.randn_like(${a()}, dtype=torch.float32)${cmt}`];
     case "dropout":
       return [`${ind}${o()} = F.dropout(${a()}, p=${num("p", 0.5)}, training=self.training)${cmt}`];
     case "attention": {
@@ -327,7 +356,7 @@ function emitNode(mod: IRModule, n: IRNode, ind: string, env: Map<string, number
       return [`${ind}${o()} = ${a()}.masked_fill(${a(1)}, ${num("value")})${cmt}`];
     case "causal_mask": {
       const nn = dr(dimAttr(n.attrs.n));
-      return [`${ind}${o()} = torch.triu(torch.ones(${nn}, ${nn}, dtype=torch.bool), diagonal=1)${cmt}`];
+      return [`${ind}${o()} = torch.triu(torch.ones(${nn}, ${nn}, dtype=torch.bool, device=device), diagonal=1)${cmt}`];
     }
     case "one_hot":
       return [`${ind}${o()} = F.one_hot(${a()}.long(), ${dr(dimAttr(n.attrs.classes))}).float()${cmt}`];
@@ -336,6 +365,12 @@ function emitNode(mod: IRModule, n: IRNode, ind: string, env: Map<string, number
     case "detach_kind":
       return [`${ind}${o()} = ${a()}  # semantic kind reinterpreted (no runtime effect)`];
     case "slice": {
+      if (n.attrs.dynamic) {
+        const starts = dimList(n.attrs.from), ends = dimList(n.attrs.to);
+        const openTo = n.attrs.openTo as number[];
+        const parts = (n.attrs.kinds as string[]).map((kind, i) => kind === "ellipsis" ? "..." : kind === "all" ? ":" : kind === "index" ? dr(starts[i]) : `${dr(starts[i])}:${openTo[i] ? "" : dr(ends[i])}`);
+        return [`${ind}${o()} = ${a()}[${parts.join(", ")}]  # F-030: runtime-ranked slice, static result unknown`];
+      }
       const axes = (n.attrs.axes as number[]) ?? [];
       const from = dimList(n.attrs.from);
       const to = dimList(n.attrs.to);
@@ -499,8 +534,10 @@ function emitPlan(mod: IRModule, plan: IRPlan): string[] {
   const lowerBinding = (text: string): string => {
     const src = text.trim();
     const call = /^(\w+)\((.*)\)(\[\d+\])?$/.exec(src);
-    if (call && plan.models.some((m) => m.alias === call[1]))
-      return `${py(call[1])}(${splitArgs(call[2]).map(lowerBinding).join(", ")})${call[3] ?? ""}`;
+    if (call && plan.models.some((m) => m.alias === call[1])) {
+      const forward = `${py(call[1])}(${splitArgs(call[2]).map(lowerBinding).join(", ")})`;
+      return call[3] ? `projected(cache, ${JSON.stringify(`${call[1]}(${call[2]})`)}, lambda: ${forward}, ${call[3].slice(1, -1)})` : forward;
+    }
     return `batch[${JSON.stringify(src)}]`;
   };
   const lossExpr = (l: IRPlan["losses"][number]) =>
@@ -516,16 +553,17 @@ function emitPlan(mod: IRModule, plan: IRPlan): string[] {
   const optOf = (name: string) => plan.optimizers.find((o) => o.name === name);
 
   L.push("# --- training plan -------------------------------------------------------");
-  L.push(`def train_${py(plan.name)}(loader, val_loader=None, models=None, **dims):`);
+  L.push(`def train_${py(plan.name)}(loader, val_loader=None, *, models=None, device=None, **dims):`);
   L.push(`    """\`models\` lets a host own the model instances (an agent that acts with the same`);
   L.push(`    network the plan updates); missing aliases are instantiated here."""`);
+  L.push(`    device = execution_device(device if device is not None else ${JSON.stringify(plan.settings.device ?? "auto")})`);
   L.push(`    models = dict(models or {})`);
   const seen = new Map<string, string>();
   for (const m of plan.models) {
     const first = seen.get(m.model);
     if (first) L.push(`    ${py(m.alias)} = ${first}  # one model declaration is one parameter set: both aliases share it (AXS0706, F-015)`);
     else {
-      L.push(`    ${py(m.alias)} = models.get("${m.alias}") or ${py(m.model)}(**dims)`);
+      L.push(`    ${py(m.alias)} = (models.get("${m.alias}") or ${py(m.model)}(device=device, **dims)).to(device)`);
       seen.set(m.model, py(m.alias));
     }
   }
@@ -546,7 +584,11 @@ function emitPlan(mod: IRModule, plan: IRPlan): string[] {
   }
   L.push("");
   L.push("    # losses — one closure per `loss`, reused by training and validation");
-  for (const l of plan.losses) L.push(`    loss_${py(l.name)} = lambda batch: ${lossExpr(l)}`);
+  for (const l of plan.losses) {
+    L.push(`    def loss_${py(l.name)}(batch):`);
+    L.push("        cache = {}  # fresh for each loss/update/validation");
+    L.push(`        return ${lossExpr(l)}`);
+  }
   L.push(`    losses = {${plan.losses.map((l) => `"${l.name}": loss_${py(l.name)}`).join(", ")}}`);
   if (plan.tracks.length) {
     L.push("");
@@ -567,6 +609,7 @@ function emitPlan(mod: IRModule, plan: IRPlan): string[] {
   L.push("        for m in models.values(): m.eval()");
   L.push("        with torch.no_grad():");
   L.push("            for batch in (val_loader or loader):");
+  L.push("                batch = move_batch(batch, device)");
   L.push("                for name, fn in losses.items(): out[name] = out.get(name, 0.0) + float(fn(batch))");
   L.push("                n += 1");
   L.push("        for m in models.values(): m.train()");
@@ -616,6 +659,7 @@ function emitPlan(mod: IRModule, plan: IRPlan): string[] {
     L.push(`    phase_step, phase_budget, stop = 0, ${budget}, False`);
     L.push(`    for epoch in range(${ph.steps !== null ? 1 : ph.epochs}):`);
     L.push(`        for batch in loader:`);
+    L.push("            batch = move_batch(batch, device)");
     L.push(`            apply_schedule([${phaseOpts.map(py).join(", ")}], schedule, phase_step, phase_budget)`);
     for (const u of ph.updates) {
       const loss = plan.losses.find((l) => l.name === u.loss);
